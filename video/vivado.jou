@@ -1,0 +1,14 @@
+#-----------------------------------------------------------
+# Vivado v2023.2 (64-bit)
+# SW Build 4029153 on Fri Oct 13 20:13:54 MDT 2023
+# IP Build 4028589 on Sat Oct 14 00:45:43 MDT 2023
+# SharedData Build 4025554 on Tue Oct 10 17:18:54 MDT 2023
+# Start of session at: Tue Jan 27 14:53:01 2026
+# Process ID: 25609
+# Current directory: /home/t-kudimov/vitis_prj/working_version_krt/test/123/src/video
+# Command line: vivado
+# Log file: /home/t-kudimov/vitis_prj/working_version_krt/test/123/src/video/vivado.log
+# Journal file: /home/t-kudimov/vitis_prj/working_version_krt/test/123/src/video/vivado.jou
+# Running On: PC105355, OS: Linux, CPU Frequency: 4307.910 MHz, CPU Physical cores: 10, Host memory: 33425 MB
+#-----------------------------------------------------------
+start_gui
