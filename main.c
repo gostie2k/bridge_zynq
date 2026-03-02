@@ -55,6 +55,7 @@
 #include "xil_cache.h"
 #include "modem.h"
 #include "netif/bridgeif.h"
+#include "firewall.h"
 
 
 //struct circular_buffer_a;
@@ -380,7 +381,9 @@ struct no_os_spi_desc desc_tmp;
 void cmd_udp_callback(void *arg, struct udp_pcb *upcb, struct pbuf *p, const ip_addr_t *addr, u16_t port)
 {
 
-
+	xil_printf("[CMD_UDP] pkt from %d.%d.%d.%d:%d len=%d data[0]=0x%02X\r\n",
+	           ip4_addr1(addr), ip4_addr2(addr), ip4_addr3(addr), ip4_addr4(addr),
+	           port, p->len, ((uint8_t*)p->payload)[0]);
 	   extern struct ad9361_rf_phy *ad9361_phy;
 	    extern struct no_os_spi_desc desc_tmp;
 
@@ -770,7 +773,7 @@ void cmd_udp_callback(void *arg, struct udp_pcb *upcb, struct pbuf *p, const ip_
             if (len == 2) {
                 uint32_t atten_mdb = 0;
                 ad9361_get_tx_attenuation(ad9361_phy, 1, &atten_mdb);
-                uint32_t atten_db = atten_mdb / 1000;
+                uint32_t atten_db = atten_mdb / 100;
 
                 //xil_printf("[UDP READ TX ATT] Got %lu dB (%lu mdB)\n\r", atten_db, atten_mdb);
 
@@ -966,14 +969,111 @@ void cmd_udp_callback(void *arg, struct udp_pcb *upcb, struct pbuf *p, const ip_
     }
 
 
-    else
-    {
+    else if (len >= 3)
+       {
+           uint16_t ucnt_rx = ((uint16_t)data[0] << 8) | data[1];
+           uint8_t  cmd     = data[2];
 
-    	pbuf_free(p);
-    	return;
+           switch (cmd) {
 
-    }
+           /* --- 0x05: Установка параметров сетевого фильтра (11 байт) --- */
+           case 0x05:
+               if (len >= 11) {
+                   uint32_t ip_mask = ((uint32_t)data[3] << 24) |
+                                      ((uint32_t)data[4] << 16) |
+                                      ((uint32_t)data[5] << 8)  |
+                                      ((uint32_t)data[6]);
+                   uint8_t arp_en  = data[7];
+                   uint8_t icmp_en = data[8];
+                   uint8_t tcp_en  = data[9];
+                   uint8_t udp_en  = data[10];
 
+                   firewall_set_config(ip_mask, arp_en, icmp_en, tcp_en, udp_en);
+
+                   xil_printf("[CMD 0x05] ucnt=%d mask=%d.%d.%d.%d ARP=%d ICMP=%d TCP=%d UDP=%d\r\n",
+                              ucnt_rx,
+                              (ip_mask >> 24) & 0xFF, (ip_mask >> 16) & 0xFF,
+                              (ip_mask >> 8) & 0xFF,  ip_mask & 0xFF,
+                              arp_en, icmp_en, tcp_en, udp_en);
+               }
+               break;
+
+           /* --- 0x06: Запрос параметров сетевого фильтра (запрос 3 байт, ответ 11 байт) --- */
+           case 0x06:
+           {
+               firewall_config_t cfg = firewall_get_config();
+
+               struct pbuf *resp = pbuf_alloc(PBUF_TRANSPORT, 11, PBUF_RAM);
+               if (resp) {
+                   uint8_t *r = (uint8_t *)resp->payload;
+                   /* ucnt — возвращаем тот же счётчик что пришёл */
+                   r[0] = data[0];
+                   r[1] = data[1];
+                   r[2] = 0x06;
+                   /* ip_mask big-endian */
+                   r[3] = (cfg.ip_mask >> 24) & 0xFF;
+                   r[4] = (cfg.ip_mask >> 16) & 0xFF;
+                   r[5] = (cfg.ip_mask >> 8)  & 0xFF;
+                   r[6] =  cfg.ip_mask        & 0xFF;
+                   r[7]  = cfg.arp_en;
+                   r[8]  = cfg.icmp_en;
+                   r[9]  = cfg.tcp_en;
+                   r[10] = cfg.udp_en;
+
+                   udp_sendto(upcb, resp, addr, port);
+                   pbuf_free(resp);
+
+                   xil_printf("[CMD 0x06] Query from ucnt=%d -> responded\r\n", ucnt_rx);
+               }
+               break;
+           }
+
+           /* --- 0x07: Установка IP через broadcast (15 байт) --- */
+           case 0x07:
+               if (len >= 15) {
+                   /* IP адреса приходят в network byte order (big-endian) */
+                   ip4_addr_t new_ip, new_mask, new_gw;
+
+                   /* Собираем из big-endian в host order, затем используем IP4_ADDR_SET */
+                   uint32_t ip_val = ((uint32_t)data[3]  << 24) | ((uint32_t)data[4]  << 16) |
+                                     ((uint32_t)data[5]  << 8)  | ((uint32_t)data[6]);
+                   uint32_t nm_val = ((uint32_t)data[7]  << 24) | ((uint32_t)data[8]  << 16) |
+                                     ((uint32_t)data[9]  << 8)  | ((uint32_t)data[10]);
+                   uint32_t gw_val = ((uint32_t)data[11] << 24) | ((uint32_t)data[12] << 16) |
+                                     ((uint32_t)data[13] << 8)  | ((uint32_t)data[14]);
+
+                   IP4_ADDR(&new_ip,   (ip_val >> 24) & 0xFF, (ip_val >> 16) & 0xFF,
+                                       (ip_val >> 8)  & 0xFF,  ip_val & 0xFF);
+                   IP4_ADDR(&new_mask, (nm_val >> 24) & 0xFF, (nm_val >> 16) & 0xFF,
+                                       (nm_val >> 8)  & 0xFF,  nm_val & 0xFF);
+                   IP4_ADDR(&new_gw,   (gw_val >> 24) & 0xFF, (gw_val >> 16) & 0xFF,
+                                       (gw_val >> 8)  & 0xFF,  gw_val & 0xFF);
+
+                   netif_set_addr(&bridge_netif, &new_ip, &new_mask, &new_gw);
+
+                   xil_printf("[CMD 0x07] IP changed to %d.%d.%d.%d  mask %d.%d.%d.%d  gw %d.%d.%d.%d\r\n",
+                              (ip_val >> 24) & 0xFF, (ip_val >> 16) & 0xFF,
+                              (ip_val >> 8)  & 0xFF,  ip_val & 0xFF,
+                              (nm_val >> 24) & 0xFF, (nm_val >> 16) & 0xFF,
+                              (nm_val >> 8)  & 0xFF,  nm_val & 0xFF,
+                              (gw_val >> 24) & 0xFF, (gw_val >> 16) & 0xFF,
+                              (gw_val >> 8)  & 0xFF,  gw_val & 0xFF);
+               }
+               break;
+
+           default:
+               break;
+           }
+
+           pbuf_free(p);
+           return;
+       }
+
+       else
+       {
+           pbuf_free(p);
+           return;
+       }
 
 
 
@@ -2255,7 +2355,8 @@ for (uint32_t i=0;i<8;i++){
 #endif
 #endif
 
-lwip_init();
+    firewall_init();
+    lwip_init();
 
 #ifdef BRIDGE
     net_init();
@@ -2303,6 +2404,14 @@ lwip_init();
     debug_pcb = udp_new(); // send status & debug pkts
     udp_bind_netif (debug_pcb, &bridge_netif); //&udp_netif2);
 
+    cmd_udp_pcb = udp_new();
+    ip_set_option(cmd_udp_pcb, SOF_BROADCAST);
+
+       //udp_bind_netif(cmd_udp_pcb, &bridge_netif);
+       udp_bind(cmd_udp_pcb, IP_ADDR_ANY, CmdPort);
+       udp_recv(cmd_udp_pcb, cmd_udp_callback, NULL);
+       xil_printf("[INIT] cmd_udp_pcb bound to port %d on bridge_netif\r\n", CmdPort);
+
     //status = udp_bind(debug_pcb, IP_ADDR_ANY, CmdPort);
     //udp_recv(debug_pcb, cmd_udp_callback, NULL);
 
@@ -2312,8 +2421,8 @@ lwip_init();
 
     //stt = true;
 
-    ad9361_bist_loopback(ad9361_phy, 1);
-    xil_printf("!!! WARNING: AD9361 DIGITAL LOOPBACK ENABLED !!!\n\r");
+//    ad9361_bist_loopback(ad9361_phy, 1);
+//    xil_printf("!!! WARNING: AD9361 DIGITAL LOOPBACK ENABLED !!!\n\r");
 
     platform_enable_interrupts();
     is_run = true;
@@ -2321,6 +2430,8 @@ lwip_init();
     while(1)
         {
             //sys_check_timeouts();
+    	//xemacif_input(&port1_bridge);
+
             xemacif_input(echo_netif);
 
         	vid_buf_exch(buf_vid, vid_out);
@@ -2360,6 +2471,7 @@ lwip_init();
 
             radio_tx_periodic_flush();
 
+            //fifo_debug_uart_test(&Uart1_Ps);
 
         	cnt_uart_rx_buf = uart_cmd_chan(cnt_uart_rx_buf, &buf, &Uart1_Ps, &desc_tmp, &func_start, &func_type, &func_par[0], &fpga_regs[0]);
         	debug_ram_load(&bufff_cnt, &bufff[0], &Gpio_Ps, &Uart1_Ps);

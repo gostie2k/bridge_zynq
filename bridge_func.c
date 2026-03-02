@@ -103,68 +103,14 @@ err_t vport3_init(struct netif *netif) {
     return ERR_OK;
 }
 
-//err_t vport3_linkoutput(struct netif *netif, struct pbuf *p) {
-//
-//	 struct eth_hdr *ethhdr = (struct eth_hdr*)p->payload;
-//     err_t out = ERR_OK;
-//
-//
-////     if ((ethhdr->dest.addr[0] == bridge_data.ethaddr.addr[0])&&(ethhdr->dest.addr[1] == bridge_data.ethaddr.addr[1])&&(ethhdr->dest.addr[2] == bridge_data.ethaddr.addr[2])&&
-////     (ethhdr->dest.addr[3] == bridge_data.ethaddr.addr[3])&&(ethhdr->dest.addr[4] == bridge_data.ethaddr.addr[4])&&(ethhdr->dest.addr[5] == bridge_data.ethaddr.addr[5]))
-////     {
-////    	 pbuf_free(p);
-////    	 return out;
-////     }
-////
-////
-////
-////	if (DEB_FUNC)
-////	{
-////	       //struct eth_hdr *ethhdr = (struct eth_hdr*)p->payload;
-////	        xil_printf("[port3_bridge] ethernet_input: dest:%02X:%02X:%02X:%02X:%02X:%02X, src:%02X:%02X:%02X:%02X:%02X:%02X, type:%04X  len: %4d \n\r",
-////	       (unsigned char)ethhdr->dest.addr[0], (unsigned char)ethhdr->dest.addr[1], (unsigned char)ethhdr->dest.addr[2],
-////	       (unsigned char)ethhdr->dest.addr[3], (unsigned char)ethhdr->dest.addr[4], (unsigned char)ethhdr->dest.addr[5],
-////	       (unsigned char)ethhdr->src.addr[0],  (unsigned char)ethhdr->src.addr[1],  (unsigned char)ethhdr->src.addr[2],
-////	       (unsigned char)ethhdr->src.addr[3],  (unsigned char)ethhdr->src.addr[4],  (unsigned char)ethhdr->src.addr[5],
-////		   lwip_htons(ethhdr->type), p->tot_len  );
-////
-////
-////           int row = 0;
-////	       for (int i=0;i< p->tot_len; i++)
-////	       {
-////	    	   xil_printf("%02X ", *(  (char*) p->payload + i)      );
-////
-////	       row++;
-////
-////	       if (row == 16)
-////	       {
-////	    	   xil_printf("\n\r" );
-////	    	   row = 0;
-////	       }
-////
-////	       }
-////
-////	       xil_printf("\n\r" );
-////
-////	}
-//
-//
-//     cmd_push(&buf_cmd, (uint8_t*)p->payload, p->len);
-//
-//     deb_cnt_rf++;
-//
-//     pbuf_free(p);
-//
-//	 return out;
-//
-//}
-
  err_t vport3_linkoutput(struct netif *netif, struct pbuf *p) {
 
-//    if (buf_cmd->count >= CMD_BUF_DEPTH) {
-//        return ERR_OK;
-//    }
-   // cmd_push(&buf_cmd, (uint8_t*)p->payload, p->len);
+    /* ===== СЕТЕВОЙ ЭКРАН: фильтрация перед отправкой в радиоканал ===== */
+    if (!firewall_filter(p, &bridge_netif)) {
+        /* Пакет не прошёл фильтр — не отправляем в радио */
+        return ERR_OK;
+    }
+
     deb_cnt_rf++;
     return radio_linkoutput(netif, p);
 }
@@ -252,19 +198,7 @@ void net_init()
                (void*)&bridge_data,
                bridgeif_init, ethernet_input); //eth_inp);
 
-     bridge_netif.flags|= NETIF_FLAG_ETHARP | NETIF_FLAG_ETHERNET;
-
-
-
-     //netif_set_addr (&bridge_netif, &ipb, &nmb, &gwb);
-
-
-
-
-
-
-
-
+     bridge_netif.flags|= NETIF_FLAG_ETHARP | NETIF_FLAG_ETHERNET | NETIF_FLAG_BROADCAST;
 
 
 
@@ -273,11 +207,6 @@ void net_init()
                mac1, PLATFORM_EMAC_BASEADDR);
 
      port1_bridge.flags|=NETIF_FLAG_ETHARP | NETIF_FLAG_ETHERNET;
-
-     //port1_bridge.name[0] = 'P';
-     //port1_bridge.name[1] = '1';
-
-     //netif_set_default(&port1_bridge);
 
 
      //set promiscuous mode
@@ -288,86 +217,27 @@ void net_init()
          Reg|0x00000010);
 
 
-     // netif_add(&port2_bridge,
-     //           NULL, NULL, NULL,
-     //           NULL, vport2_init, NULL);//ethernet_input);
-     // port2_bridge.name[0] = 'P';
-     // port2_bridge.name[1] = '2';
-     // port2_bridge.flags |= NETIF_FLAG_ETHARP | NETIF_FLAG_ETHERNET;
-     // netif_set_link_up(&port2_bridge);
-     // netif_set_up(&port2_bridge);
-
 
       netif_add(&port3_bridge,
                      NULL, NULL, NULL,
                      NULL, vport3_init, NULL);//ethernet_input);
-      //port3_bridge.name[0] = 'P';
-      //port3_bridge.name[1] = '3';
       port3_bridge.flags|= NETIF_FLAG_ETHARP | NETIF_FLAG_ETHERNET;
 
 
 
-
-
-
       bridgeif_add_port(&bridge_netif, &port1_bridge);
-     // bridgeif_add_port(&bridge_netif, &port2_bridge);
       bridgeif_add_port(&bridge_netif, &port3_bridge);
 
 
-
-
-
-
      netif_set_up (&bridge_netif);
-     //netif_set_link_up (&bridge_netif);
 
      netif_set_link_up(&port3_bridge);
-     netif_set_up(&port3_bridge);
+     netif_set_up(&port3_bridge);netif_set_default(&bridge_netif);
 
-     //netif_set_link_up(&port1_bridge);
+
      netif_set_up(&port1_bridge);
 
-
-
-
-
-
-/*
-#ifdef IS_OLD_PAR
-#ifdef IS_MASTER
-     IP4_ADDR(&ip2, 169,254,206,11);
-#endif
-#ifdef IS_SLAVE
-     IP4_ADDR(&ip2, 169,254,206,21);
-#endif
-#endif
-
-
-#ifndef IS_OLD_PAR
-#ifdef IS_MASTER
-     IP4_ADDR(&ip2, 192,168,250,13);
-#endif
-#ifdef IS_SLAVE
-     IP4_ADDR(&ip2, 192,168,250,23);
-#endif
-#endif
-
-*/
-
- //    IP4_ADDR(&nm2, 255,255,255,0);
- //    IP4_ADDR(&gw2, 169,254,206,1);
-     //IP4_ADDR(&gw2, 192,168,250,1);
-  //   netif_add(&udp_netif2,
-  //             &ip2, &nm2, &gw2,
-  //             NULL, udpif2_init,ethernet_input);
-
- //    udp_netif2.name[0] = 'V';
- //    udp_netif2.name[1] = '1';
-
-//     netif_set_link_up(&udp_netif2);
-//     netif_set_up(&udp_netif2);
-
+     netif_set_default(&bridge_netif);
 
 
 }
