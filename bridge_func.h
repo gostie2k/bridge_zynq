@@ -23,7 +23,8 @@
 #include "platform_config.h"
 #include "xemacps.h"
 #include "netif/xadapter.h"
-#include "firewall.h"                     /* <--- ДОБАВЛЕНО: модуль сетевого экрана */
+#include "firewall.h"
+#include "modem.h"
 
 
 
@@ -34,13 +35,14 @@
 
 #ifdef IS_MASTER
 static const bridgeif_initdata_t bridge_data =
-  BRIDGEIF_INITDATA1(3, 1024, 16,
-    ETH_ADDR(0x01,0x0A,0x35,0xAA,0xBB,0xCE));
+  BRIDGEIF_INITDATA1(5,//3
+		  1024, 16,
+    ETH_ADDR(0x00,0x1A,0x35,0xAA,0xBB,0xCE));
 #endif
 
 #ifdef IS_SLAVE
 static const bridgeif_initdata_t bridge_data =
-  BRIDGEIF_INITDATA1(3, 1024, 16,
+  BRIDGEIF_INITDATA1(5, 1024, 16,
     ETH_ADDR(0x00,0x0A,0x35,0xAA,0xBB,0xCE));
 #endif
 
@@ -58,10 +60,10 @@ typedef struct {
 } bridgeif_fdb_dynamic_t;
 
 #ifdef IS_MASTER
- static u8_t mac1[6] = {0x01,0x0A,0x35,0xAA,0xBB,0xCC};
- static u8_t mac2[6] = {0x01,0x0A,0x35,0xDD,0xEE,0x02};
- static u8_t mac3[6] = {0x01,0x0A,0x35,0xDD,0xEE,0x03};
- static u8_t mac4[6] = {0x01,0x0A,0x35,0xDD,0xEE,0x04};
+ static u8_t mac1[6] = {0x00,0x1A,0x35,0xAA,0xBB,0xCC};
+ static u8_t mac2[6] = {0x00,0x1A,0x35,0xDD,0xEE,0x02};
+ static u8_t mac3[6] = {0x00,0x1A,0x35,0xDD,0xEE,0x03};
+ static u8_t mac4[6] = {0x00,0x1A,0x35,0xDD,0xEE,0x04};
 #endif
 
 #ifdef IS_SLAVE
@@ -73,15 +75,18 @@ typedef struct {
 
 
 
-void* bridgeif_get_dynamic_fdb(struct netif *bridgeif);
+
 
 void print_dynamic_fdb(struct netif *bridgeif);
+
+void* bridgeif_get_dynamic_fdb(struct netif *bridgeif);
 
 err_t vport2_init(struct netif *netif);
 err_t vport2_linkoutput(struct netif *netif, struct pbuf *p);
 
 err_t vport3_init(struct netif *netif);
 err_t vport3_linkoutput(struct netif *netif, struct pbuf *p);
+
 
 err_t udpif2_init(struct netif *netif);
 err_t udpif2_linkoutput(struct netif *netif, struct pbuf *p);

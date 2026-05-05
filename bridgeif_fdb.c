@@ -234,14 +234,11 @@ void bridgeif_fdb_age(void *fdb_ptr)
     bridgeif_dfdb_entry_t *e = &fdb->fdb[i];
 
     if (e->used) {
-      if (e->ts < 0xFF) {
-          e->ts++;
-      }
-      if (e->ts >= BR_FDB_TIMEOUT_SEC) {
-        // xil_printf("FDB: Removing old entry %d\r\n", i); // Для отладки
-        e->used = 0;
-        e->ts = 0;
-      }
+        if (e->ts > 0) {
+            e->ts--;
+        } else {
+            e->used = 0;
+        }
     }
   }
 }

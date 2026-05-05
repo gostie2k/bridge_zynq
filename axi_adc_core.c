@@ -81,7 +81,7 @@ int32_t axi_adc_write(struct axi_adc *adc,
 		      uint32_t reg_data)
 {
 
-     printf("axi_adc_write:  axi_adc->base=%#010x reg_addr=%#010x reg_data=%#010x\n", adc->base,reg_addr,reg_data);
+   //  printf("axi_adc_write:  axi_adc->base=%#010x reg_addr=%#010x reg_data=%#010x\n", adc->base,reg_addr,reg_data);
 
 
 

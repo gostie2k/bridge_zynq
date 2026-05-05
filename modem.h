@@ -1,4 +1,3 @@
-
 /*
  * Copyright (c) 2017 KNK.
  * All rights reserved.
@@ -10,19 +9,60 @@
  *
  */
 
-#ifndef MODEM_H_STATS_EXT
-#define MODEM_H_STATS_EXT
-
 #ifndef MODEM_H_
 #define MODEM_H_
 
+//CREG OFFSET
+#define BASE_PAR_OFFSET 0
+#define TX_CHAN0_PAR_OFFSET 4*8
+#define RX_CHAN0_PAR_OFFSET 4*(8+4)
+
+#ifndef IS_QT
+
+#include "ad9361/no_os_spi.h"
+#include "spi_engine/spi_engine.h"
+#include "platform_config.h"
+#include "axi_cntrl_reg/axi_cntrl_reg.h"
+#include "ad9361/ad9361_api.h"
+#include "sleep.h"
+
+#endif
+
 #include <stdio.h>
 #include <stdint.h>
-//#include <stdbool.h>
-//#include <string.h>
-//#include <stdlib.h>
 
-//#define CMD_BUF_DEPTH 128
+
+typedef enum {
+    DISABLED = 0,
+    ENABLED  = 1
+} ena_type;
+
+
+typedef enum {
+    TX_PANEL_1 = 0,
+    TX_PANEL_2 = 1,
+	RX_PANEL_1 = 2,
+	RX_PANEL_2 = 3,
+	RX_PANEL_3 = 4,
+	RX_PANEL_4 = 5
+} com_dev_type;
+
+typedef enum {
+	F_4000_4200_MHz = 0,
+	F_3700_3980_MHz = 1,
+	F_3400_3600_MHz = 2,
+	BYPASS=3
+} pow_cntrl_type;
+
+
+
+typedef enum {
+    CMD_SRC_UART,
+    CMD_SRC_UDP
+} cmd_source_t;
+
+
+
 
 #pragma pack(push,1)
 struct stat_cntrl_tx
@@ -59,6 +99,51 @@ struct stat_rx
 
 
 #pragma pack(push,1)
+struct stat_npu
+{
+
+	   union
+	   {
+		  uint8_t word;
+		  struct
+		   {
+		     //from bit#0....down to bit#7
+			  uint8_t cntrl_temp1:1;
+			  uint8_t cntrl_temp2:1;
+			  uint8_t cntrl_temp3:1;
+			  uint8_t cntrl_temp4:1;
+			  uint8_t cntrl_pow1:1;
+			  uint8_t cntrl_pow2:1;
+			  uint8_t cntrl_pow3:1;
+			  uint8_t cntrl_pow4:1;
+		    } inside;
+	   } tx_panel_1;
+
+	   union
+	   {
+		  uint8_t word;
+		  struct
+		   {
+		     //from bit#0....down to bit#7
+			  uint8_t cntrl_temp1:1;
+			  uint8_t cntrl_temp2:1;
+			  uint8_t cntrl_temp3:1;
+			  uint8_t cntrl_temp4:1;
+			  uint8_t cntrl_pow1:1;
+			  uint8_t cntrl_pow2:1;
+			  uint8_t cntrl_pow3:1;
+			  uint8_t cntrl_pow4:1;
+		    } inside;
+	   } tx_panel_2;
+
+	   uint8_t cntrl_temp_filt_board;
+
+};
+#pragma pack(pop)
+
+
+
+#pragma pack(push,1)
 struct stat_modem
 {
 	float TempFPGA;
@@ -68,11 +153,12 @@ struct stat_modem
 	uint8_t gpio_status;
 	struct stat_cntrl_tx status_cntrl_tx;
 	struct stat_rx  status_rx;
+    struct stat_npu status_npu;
 };
 #pragma pack(pop)
 
 
-struct stat_modem* stat_modem_init();
+/* ========== lwIP stats response (from user's version) ========== */
 
 #define CMD_PROTO_MAGIC 0x90
 #define CMD_GET_STATS   0x20
@@ -101,7 +187,127 @@ typedef struct {
 } stats_resp_t;
 #pragma pack(pop)
 
-#endif
+
+struct stat_modem* stat_modem_init();
+void modem_fill_stats(stats_resp_t *resp);
+void modem_print_stats(void);
+
+void send_modem_status(struct stat_modem* status);
+
+
+/* ========== modem control structures (from video_debug version) ========== */
+
+/**
+ * @struct ppos_rx
+ * @brief Structure parameters for PPOS
+ */
+#pragma pack(push,1)
+struct ppos_rx
+{
+
+	/** set rx parameters */
+   union
+   {
+	  uint32_t word;
+	  struct
+	   {
+	     //from bit#0....down to bit#31
+          uint16_t mod:2;
+          uint16_t bod:2;
+          uint16_t code:3;
+          uint16_t scr_on:1;
+          uint16_t rot_on:1;
+          uint16_t rcos_filt_on:1;
+          uint16_t freq_shift_on:1;
+          uint16_t run:1;
+          uint16_t reserve: 4;
+          uint16_t pkt_len;
+	    } inside;
+	} creg0;
+
+	/** set rx frequency AD9361 */
+   union
+    {
+	  uint32_t word;
+	  struct
+	   {
+		  uint32_t ad9361_rx_freq;
+	    } inside;
+	} creg1;
+
+
+
+};
+#pragma pack(pop)
+
+
+
+
+
+/**
+ * @struct ppos_tx
+ * @brief Structure parameters for PPOS
+ */
+#pragma pack(push,1)
+struct ppos_tx
+{
+
+	/** create impulse, after sset sclr on */
+   union
+   {
+	  uint32_t word;
+	  struct
+	   {
+	     //from bit#0....down to bit#31
+		  uint16_t mod:2;
+		  uint16_t bod:2;
+		  uint16_t code:3;
+		  uint16_t scr_on: 1;
+		  uint16_t mux_ad9361_din:4;
+          uint16_t run: 1;
+          uint16_t reserve:3;
+	      uint16_t pkt_len;
+	    } inside;
+	} creg0;
+
+
+	/** set test generator frequency */
+   union
+    {
+	  uint32_t word;
+	  struct
+	   {
+		  uint32_t test_gen_fc;
+	    } inside;
+	} creg1;
+
+	/** set tx frequency AD9361 */
+   union
+    {
+	  uint32_t word;
+	  struct
+	   {
+		  uint32_t ad9361_tx_freq;
+	    } inside;
+	} creg2;
+
+	/** set tx frequency AD9361 */
+   union
+    {
+	  uint32_t word;
+	  struct
+	   {
+		  uint16_t ad9361_tx_atten:10;
+		  uint16_t reserve_0:6;
+		  uint16_t reserve_1;
+	    } inside;
+	} creg3;
+
+
+
+
+};
+#pragma pack(pop)
 
 
 
@@ -109,22 +315,175 @@ typedef struct {
 
 
 
+/**
+ * @struct ppos_par
+ * @brief Structure parameters for PPOS
+ */
+#pragma pack(push,1)
+struct ppos_par
+{
+
+	/** version */
+   union
+   {
+	  uint32_t word;
+	  struct
+	   {
+		     //from bit#0....down to bit#31
+			     /** version */
+		         unsigned sn:12;
+		         /** product version */
+			     unsigned pv:8;
+			     /** product number */
+			     unsigned pn:12;
+	   } inside;
+   } creg0;
+
+
+	/** create impulse, after sset sclr on */
+   union
+   {
+	  uint32_t word;
+	  struct
+	   {
+	     //from bit#0....down to bit#31
+	     unsigned imit_ps_int_gpio_63:1;
+	     unsigned imit_ps_int_gpio_62:1;
+	     unsigned mfunc_start:1;
+	     unsigned test_gen_set_fc:1;
+	     unsigned set_dac_ltc2630:1;
+	     unsigned reserve:27;
+	    } inside;
+	} creg1;
+
+
+	/** hardware settings */
+   union
+    {
+	  uint32_t word;
+	  struct
+	   {
+	     //from bit#0....down to bit#31
+	     unsigned Rx1B:1; // !Rx1A
+	     unsigned Tx1B:1; // !Tx1A
+	     unsigned Rx2B:1; // !Rx2A
+	     unsigned Tx2B:1; // !Tx2A
+	     unsigned GPIO1R:1;
+	     unsigned GPIO2R:1;
+	     unsigned GPIO3R:1;
+	     unsigned GPIO4R:1;
+	     unsigned GPIO5R:1;
+	     unsigned GPIO6R:1;
+	     unsigned GPIO1R_DIR:1;
+		 unsigned GPIO2R_DIR:1;
+		 unsigned GPIO3R_DIR:1;
+		 unsigned GPIO4R_DIR:1;
+		 unsigned GPIO5R_DIR:1;
+		 unsigned GPIO6R_DIR:1;
+	     unsigned GPIOnR_TYPE:2;
+	     unsigned Tang:1;
+	     unsigned Tang_avt:1;
+	     unsigned Pit:1;
+	     unsigned Fdiap:3; //air: 0 - 3.4-3.6, !0 - 3.7-3.9
+
+	     unsigned GPIO1R_IN:1;
+		 unsigned GPIO2R_IN:1;
+		 unsigned GPIO3R_IN:1;
+		 unsigned GPIO4R_IN:1;
+		 unsigned GPIO5R_IN:1;
+		 unsigned GPIO6R_IN:1;
+		 unsigned reserve:2;
+
+	    } inside;
+	} creg2;
+
+
+
+	/** set line parameters for gain board slave modem */
+   union
+    {
+	  uint32_t word;
+	  struct
+	   {
+		     //from bit#0....down to bit#31
+		     unsigned nuf_pit:1;
+		     unsigned uf_tangenta:1;
+		     unsigned uf_sel:1;
+		     unsigned uf_tangenta_ena_avt:1;
+		     unsigned reserve:28;
+	    } inside;
+	} creg3;
+
+
+
+
+	/** time selection parameters */
+   union
+    {
+	  uint32_t word;
+	  struct
+	   {
+		  uint16_t txnrx_setup;
+		  uint16_t txnrx_hold;
+	    } inside;
+	} creg4;
+
+
+
+	/** set cmd ltc2630 */
+   union
+    {
+	  uint32_t word;
+	  struct
+	   {
+		     //from bit#0....down to bit#31
+		     unsigned ltc2630_dac_data:8;
+		     unsigned ltc2630_dac_com:4;
+		     unsigned reserve:20;
+	    } inside;
+	} creg5;
 
 
 
 
 
+	struct ppos_tx* ppos_txs;
+	struct ppos_rx* ppos_rxs;
+
+	uint8_t   num_ppos_txs;
+	uint8_t   num_ppos_rxs;
+
+	uint8_t   status_on;
+	uint8_t   status_ip[4];
+
+	uint16_t  status_port;
 
 
 
+};
+#pragma pack(pop)
 
 
 
+void spi_engine_ad9361_init(struct no_os_spi_desc**  spi_eng);
+void spi_engine_npu_com_board_init(struct no_os_spi_desc**  spi_eng);
+void spi_engine_npu_pow_board_init(struct no_os_spi_desc**  spi_eng);
+
+void spi_engine_npu_com_board_get_status(struct no_os_spi_desc*  spi_eng, struct stat_npu* status_npu);
+void spi_engine_npu_com_board_set_ena(struct no_os_spi_desc*  spi_eng, com_dev_type com_dev,  ena_type ena);
+//void spi_engine_npu_pow_board_get_status(struct no_os_spi_desc*  spi_eng, struct stat_npu* status_npu);
+//void spi_engine_npu_pow_board_set_ena(struct no_os_spi_desc*  spi_eng, pow_cntrl_type cntrl_type,  ena_type ena );
+//void spi_engine_npu_pow_board_set_f_diap(struct no_os_spi_desc*  spi_eng,  pow_cntrl_type typ );
+void spi_engine_npu_pow_board_set_f_diap(struct no_os_spi_desc*  spi_eng_com, struct no_os_spi_desc*  spi_eng,  pow_cntrl_type typ );
+
+void spi_engine_npu_com_board_set_sd_on(struct no_os_spi_desc*  spi_eng);
+void spi_engine_npu_com_board_set_sd_off(struct no_os_spi_desc*  spi_eng);
+void spi_engine_npu_com_board_set_sd_status(struct no_os_spi_desc*  spi_eng);
+
+//void ppos_set_tangenta(ena_type ena);
+void ppos_set_tangenta(struct no_os_spi_desc*  spi_eng, ena_type ena);
 
 
 
-
-
-
-
+void modem_init();
 #endif // MODEM_H_

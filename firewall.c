@@ -86,58 +86,37 @@ int firewall_filter(struct pbuf *p, struct netif *bridge_nif)
 
     /* --- ARP --- */
     if (eth_type == ETHTYPE_ARP) {
-    	if (fw_cfg.arp_en != 0x01) FW_BLOCK("ARP disabled");
-    	FW_BLOCK("non-IPv4/ARP");
-    	return 1;
+        if (fw_cfg.arp_en != 0x01) FW_BLOCK("ARP disabled");
+        return 1;  // ARP разрешён
     }
 
     /* --- IPv4 --- */
     if (eth_type == ETHTYPE_IP) {
-        /* Проверяем, что хватает данных на IP-заголовок */
-        if (p->len < (sizeof(struct eth_hdr) + 20)) {
-        	FW_BLOCK("IP hdr too short");
-        }
+        if (p->len < (sizeof(struct eth_hdr) + 20))
+            FW_BLOCK("IP hdr too short");
 
         uint8_t *ip_hdr = (uint8_t *)p->payload + sizeof(struct eth_hdr);
 
-        /* Destination IP: байты 16..19 IP-заголовка (network byte order) */
         uint32_t dst_ip;
-        memcpy(&dst_ip, ip_hdr + 16, 4); /* уже в network byte order */
+        memcpy(&dst_ip, ip_hdr + 16, 4);
 
-        /* Проверка по маске (если маска != 0) */
         if (fw_cfg.ip_mask != 0) {
-            uint32_t mask_n = lwip_htonl(fw_cfg.ip_mask); /* переводим маску в network order */
-
-            /* Broadcast всегда пропускаем */
+            uint32_t mask_n = lwip_htonl(fw_cfg.ip_mask);
             if (dst_ip != 0xFFFFFFFF) {
                 uint32_t bridge_ip_n = ip4_addr_get_u32(netif_ip4_addr(bridge_nif));
-                if ((dst_ip & mask_n) != (bridge_ip_n & mask_n)) {
-                	FW_BLOCK("IP mask mismatch"); /* dst не в нашей подсети — блокируем */
-                }
+                if ((dst_ip & mask_n) != (bridge_ip_n & mask_n))
+                    FW_BLOCK("IP mask mismatch");
             }
         }
 
-        /* Протокол: байт 9 IP-заголовка */
         uint8_t protocol = ip_hdr[9];
-
         switch (protocol) {
-            case 1:  /* ICMP */
-            	if (fw_cfg.icmp_en != 0x01) FW_BLOCK("ICMP disabled");
-            	FW_BLOCK("non-IPv4/ARP");
-            	return 1;
-            case 6:  /* TCP */
-                if (fw_cfg.tcp_en != 0x01) FW_BLOCK("TCP disabled");
-                FW_BLOCK("non-IPv4/ARP");
-                return 1;
-            case 17: /* UDP */
-            	if (fw_cfg.udp_en != 0x01) FW_BLOCK("UDP disabled");
-            	FW_BLOCK("non-IPv4/ARP");
-            	return 1;
-            default:
-            	FW_BLOCK("unknown IP proto"); /* неизвестный протокол — блокируем */
+            case 1:  if (fw_cfg.icmp_en != 0x01) FW_BLOCK("ICMP disabled"); return 1;
+            case 6:  if (fw_cfg.tcp_en  != 0x01) FW_BLOCK("TCP disabled");  return 1;
+            case 17: if (fw_cfg.udp_en  != 0x01) FW_BLOCK("UDP disabled");  return 1;
+            default: FW_BLOCK("unknown IP proto");
         }
     }
 
-    /* Всё остальное (IPv6 и прочее) — блокируем */
     FW_BLOCK("non-IPv4/ARP");
 }

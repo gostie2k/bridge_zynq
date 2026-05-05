@@ -18,7 +18,7 @@
  */
 
 
-
+#include "cmd_udp.h"
 #include "radio_stream.h"
 #include "lwip/timeouts.h"
 #include <stdio.h>
@@ -54,6 +54,9 @@
 #include "xil_misc_psreset_api.h"
 #include "xil_cache.h"
 #include "modem.h"
+#include "spi_engine/spi_engine.h"
+#include "ad9361/no_os_spi.h"
+#include "axi_cntrl_reg/axi_cntrl_reg.h"
 #include "netif/bridgeif.h"
 #include "firewall.h"
 
@@ -67,12 +70,41 @@ cmd_buf*   buf_cmd;
 cmd_out_buf* cmd_out;
 struct cmd_pkt* zero_cmd_pkt;
 
-u32 temp_rx_words[47]; // Буфер для чтения 47 слов (188 байт) из FIFO
-    uint8_t temp_rx_block[188]; // Буфер для байтов
-    int rx_word_idx;
+
+
+struct ppos_tx tx_chan0;
+struct ppos_rx rx_chan0;
+struct ppos_par ppos;
+
+
+
+
+
+
+//u32 temp_rx_words[47]; // Буфер для чтения 47 слов (188 байт) из FIFO
+//    uint8_t temp_rx_block[188]; // Буфер для байтов
+//    int rx_word_idx;
+
+#define PL_TX_BLOCK_SIZE  188   // Размер блока для radio_input_block
+#define PL_RX_MAX_SIZE    256   // Максимальный размер RX (с запасом)
+
+u32     temp_rx_words[PL_RX_MAX_SIZE / 4];
+uint8_t temp_rx_block[PL_RX_MAX_SIZE];
+int     rx_word_idx;
 
 u16 deb_cnt_br=0;
 u16 deb_cnt_rf=0;
+
+/* --- from _1: command source tracking --- */
+cmd_source_t current_cmd_source = CMD_SRC_UART;
+struct udp_pcb *global_reply_pcb = NULL;
+ip_addr_t last_client_ip;
+u16_t last_client_port;
+
+/* --- from _1: SPI engine descriptors --- */
+struct no_os_spi_desc*  spi_eng_ad9361;
+struct no_os_spi_desc*  spi_eng_npu_com_board;
+struct no_os_spi_desc*  spi_eng_npu_pow_board;
 
 u8_t sys_hours = 0;
 u8_t sys_minutes = 0;
@@ -111,7 +143,7 @@ extern void usleep(ULONG useconds);
 extern void sleep(u32 seconds);
 
 extern void bridgeif_fdb_age(void *fdb_ptr);
-extern struct netif bridge_netif;
+//extern struct netif bridge_netif;
 
 extern unsigned long val_recv_eth;
 extern unsigned long val_send_fifo;
@@ -202,11 +234,11 @@ struct udp_pcb *recv_pcb;
 struct udp_pcb *debug_pcb;
 struct udp_pcb *send_rx_data;
 
-u16_t RemotePort = 8;
-u16_t RemotePortRx = 18;
-u16_t RemotePortTxDebug = 28;
-u16_t RemotePortRxDebug = 58;
-u16_t RemotePortDeb = 78;
+//u16_t RemotePort = 8;
+u16_t RemotePortRx = 5018;
+//u16_t RemotePortTxDebug = 28;
+//u16_t RemotePortRxDebug = 58;
+u16_t RemotePortDeb = 5078;
 
 u16_t RemotePortStatus = 5007;
 
@@ -336,7 +368,12 @@ uint32_t deb_pkt_r = 0;
 uint32_t deb_pkt_w = 0;
 uint32_t deb_pkt_buf[4096];
 void send_deb();
-void send_modem_status(struct stat_modem* status);
+//void send_modem_status(struct stat_modem* status);
+
+/* --- from _1: new functions --- */
+void send_cmd();
+void send_response_byte(XUartPs *uart_ptr, u8 byte);
+void process_cmd_3bytes(uint8_t *data, XUartPs *uart_ptr, struct no_os_spi_desc *spi_desc_ptr, bool *func_start, u8 *func_type, u8 *func_par);
 
 #define GPIO_OPS	        0 //&xil_gpio_ops
 #define SPI_OPS		        0 //&xil_spi_ops
@@ -363,8 +400,8 @@ void send_modem_status(struct stat_modem* status);
 
 
 
-
-
+bool tx_seg_on = false;
+bool rx_seg_on = false;
 
 
 
@@ -376,747 +413,7 @@ void send_modem_status(struct stat_modem* status);
 struct ad9361_rf_phy *ad9361_phy;
 struct no_os_spi_desc desc_tmp;
 
-//------------------------------MERGE-------------------------------------------------------------------
 
-void cmd_udp_callback(void *arg, struct udp_pcb *upcb, struct pbuf *p, const ip_addr_t *addr, u16_t port)
-{
-
-	xil_printf("[CMD_UDP] pkt from %d.%d.%d.%d:%d len=%d data[0]=0x%02X\r\n",
-	           ip4_addr1(addr), ip4_addr2(addr), ip4_addr3(addr), ip4_addr4(addr),
-	           port, p->len, ((uint8_t*)p->payload)[0]);
-	   extern struct ad9361_rf_phy *ad9361_phy;
-	    extern struct no_os_spi_desc desc_tmp;
-
-    if (p == NULL) {
-        //xil_printf("[UDP_CMD] ERROR: Received NULL pbuf\n\r");
-        return;
-    }
-
-    uint8_t *data = (uint8_t*)p->payload;
-    uint16_t len = p->len;
-
-    //xil_printf("\n\r========== UDP COMMAND RECEIVED ==========\n\r");
-    //xil_printf("[UDP_CMD] Source IP: %d.%d.%d.%d:%d\n\r",  ip4_addr1(addr), ip4_addr2(addr),ip4_addr3(addr), ip4_addr4(addr), port);
-    //xil_printf("[UDP_CMD] Packet length: %d bytes\n\r", len);
-
-    // RAW HEX dump
-    //xil_printf("[UDP_CMD] RAW data: ");
-    //for (int i = 0; i < len && i < 32; i++) {
-        //xil_printf("%02X ", data[i]);
-       // if ((i + 1) % 16 == 0) //xil_printf("\n\r                    ");
-    //}
-    //if (len > 32) //xil_printf("... (truncated)");
-    //xil_printf("\n\r");
-
-    // ========== ПРОТОКОЛ 0x90 - НОВЫЕ КОМАНДЫ ==========
-    if (len >= 2 && data[0] == 0x90) {
-        uint8_t sub = data[1];
-        //xil_printf("[UDP_CMD] Protocol 0x90, sub=0x%02X\n\r", sub);
-
-        switch(sub) {
-            // ==================== КОМАНДЫ ЗАПИСИ ====================
-
-        case 0x02:  // Set TX frequency (WRITE)
-            if (len == 10) {
-                uint64_t freq = 0;
-
-                for (int i = 0; i < 8; i++) {
-                    freq |= ((uint64_t)data[2 + i]) << (i * 8);
-                }
-
-                //xil_printf("[UDP TX FREQ] Parsed: 0x%08lX%08lX\n\r", (uint32_t)(freq >> 32),(uint32_t)(freq & 0xFFFFFFFF));
-
-                if (freq < 70000000ULL || freq > 6000000000ULL) {
-                    //xil_printf("[UDP TX FREQ] ERROR: out of range (70MHz-6GHz)\n\r");
-                    break;
-                }
-
-                int32_t result = ad9361_set_tx_lo_freq(ad9361_phy, freq);
-
-                if (result == 0) {
-                    uint64_t actual_freq = 0;
-                    ad9361_get_tx_lo_freq(ad9361_phy, &actual_freq);
-                    //xil_printf("[UDP TX FREQ] SUCCESS: actual=0x%08lX%08lX\n\r", (uint32_t)(actual_freq >> 32), (uint32_t)(actual_freq & 0xFFFFFFFF));
-                } //else {
-                    //xil_printf("[UDP TX FREQ] ERROR: ad9361_set_tx_lo_freq returned %ld\n\r", result);
-                //}
-            } //else {
-                //xil_printf("[UDP TX FREQ] ERROR: needs 10 bytes, got %d\n\r", len);
-            //}
-            break;
-
-
-        case 0x03:  // Set RX frequency
-            if (len == 10) {
-                //xil_printf("[UDP RX FREQ] RAW bytes from Qt: ");
-                //for (int i = 0; i < 8; i++) {
-                    //xil_printf("%02X ", data[2 + i]);
-                //}
-                //xil_printf("\n\r");
-
-                uint64_t freq = 0;
-
-                //  ДЕТАЛЬНАЯ СБОРКА С ОТЛАДКОЙ
-                for (int i = 0; i < 8; i++) {
-                    uint64_t byte_val = (uint64_t)data[2 + i];
-                    uint64_t shifted = byte_val << (i * 8);
-                    freq |= shifted;
-
-                    //xil_printf("[UDP RX FREQ] i=%d: byte=0x%02X, shift=%d bits, shifted=0x%016llX, freq=0x%016llX (%llu)\n\r", i, data[2 + i], i * 8, shifted, freq, freq);
-                }
-
-                //xil_printf("[UDP RX FREQ] FINAL parsed freq: %llu Hz (0x%016llX)\n\r", freq, freq);
-
-                if (freq < 70000000ULL || freq > 6000000000ULL) {
-                    //xil_printf("[UDP RX FREQ] ERROR: freq %llu Hz out of range (70MHz-6GHz)\n\r", freq);
-                    break;
-                }
-
-                int32_t result = ad9361_set_rx_lo_freq(ad9361_phy, freq);
-
-                if (result == 0) {
-                    uint64_t actual_freq = 0;
-                    ad9361_get_rx_lo_freq(ad9361_phy, &actual_freq);
-                    //xil_printf("[UDP RX FREQ] SUCCESS: set=%llu Hz, actual=%llu Hz\n\r", freq, actual_freq);
-                }// else {
-                    //xil_printf("[UDP RX FREQ] ERROR: ad9361_set_rx_lo_freq returned %d\n\r", result);
-                //}
-            } //else {
-                //xil_printf("[UDP RX FREQ] ERROR: needs 10 bytes, got %d\n\r", len);
-            //}
-            break;
-
-
-        case 0x04:  // Set TX attenuation (WRITE)
-            if (len == 6) {
-                uint32_t atten_db = 0;
-
-                for (int i = 0; i < 4; i++) {
-                    atten_db |= ((uint32_t)data[2 + i]) << (i * 8);
-                }
-
-                uint32_t atten_mdb = atten_db * 100;
-
-                //xil_printf("[UDP TX ATT] Parsed: %lu dB (%lu mdB)\n\r", atten_db, atten_mdb);
-
-                if (atten_db > 890) {
-                    //xil_printf("[UDP TX ATT] ERROR: max 89 dB\n\r");
-                    break;
-                }
-
-                int32_t result = ad9361_set_tx_attenuation(ad9361_phy, 1, atten_mdb);
-
-                //if (result == 0) {
-                    //xil_printf("[UDP TX ATT] SUCCESS: %lu dB\n\r", atten_db);
-                //} else {
-                    //xil_printf("[UDP TX ATT] ERROR: ad9361_set_tx_attenuation returned %ld\n\r", result);
-                //}
-            } //else {
-                //xil_printf("[UDP TX ATT] ERROR: needs 6 bytes, got %d\n\r", len);
-           // }
-            break;
-
-        case 0x05:  // Test generator (WRITE)
-            if (len == 7) {
-                uint32_t fcode = 0;
-                for (int i = 0; i < 4; i++) {
-                    fcode |= ((uint32_t)data[2 + i]) << (i * 8);
-                }
-                uint8_t mask = data[6];
-
-                uint8_t d[4];
-                d[0] = 0x84; d[1] = 0x18; d[2] = (fcode >> 24) & 0xFF;
-                no_os_spi_write_and_read_11bit(&desc_tmp, d, 1);
-
-                d[1] = 0x19; d[2] = (fcode >> 16) & 0xFF;
-                no_os_spi_write_and_read_11bit(&desc_tmp, d, 1);
-
-                d[1] = 0x1a; d[2] = (fcode >> 8) & 0xFF;
-                no_os_spi_write_and_read_11bit(&desc_tmp, d, 1);
-
-                d[1] = 0x1b; d[2] = fcode & 0xFF;
-                no_os_spi_write_and_read_11bit(&desc_tmp, d, 1);
-
-                d[1] = 0x00; d[2] = 0x08;
-                no_os_spi_write_and_read_11bit(&desc_tmp, d, 1);
-
-                d[1] = 0x01; d[2] = (mask)?0xC0:0x90;
-                no_os_spi_write_and_read_11bit(&desc_tmp, d, 1);
-
-                //xil_printf("[UDP] Test gen: fcode=0x%08lX, mask=0x%02X\n\r", fcode, mask);
-            } //else {
-                //xil_printf("[UDP] ERROR: Test gen needs 7 bytes, got %d\n\r", len);
-            //}
-            break;
-
-        case 0x06:  // RX modulation (WRITE)
-            if (len == 3) {
-                uint8_t mod_val = data[2];
-                uint8_t d[4] = {0x84, 0x17, mod_val, 0};
-                no_os_spi_write_and_read_11bit(&desc_tmp, d, 1);
-                //xil_printf("[UDP] RX modulation par[23] = 0x%02X\n\r", mod_val);
-            }// else {
-                //xil_printf("[UDP] ERROR: RX mod needs 3 bytes, got %d\n\r", len);
-            //}
-            break;
-
-        case 0x07:  // TX modulation (WRITE)
-            if (len == 3) {
-                uint8_t mod_val = data[2];
-                uint8_t d[4] = {0x84, 0x16, mod_val, 0};
-                no_os_spi_write_and_read_11bit(&desc_tmp, d, 1);
-                //xil_printf("[UDP] TX modulation par[22] = 0x%02X\n\r", mod_val);
-            } //else {
-                //xil_printf("[UDP] ERROR: TX mod needs 3 bytes, got %d\n\r", len);
-            //}
-            break;
-
-        // ==================== КОМАНДЫ ЧТЕНИЯ (READ) ====================
-
-        case 0x10:  // Read TX frequency (READ)
-            if (len == 2) {
-                uint64_t tx_freq = 0;
-                ad9361_get_tx_lo_freq(ad9361_phy, &tx_freq);
-
-                //xil_printf("[UDP READ TX FREQ] Got 0x%08lX%08lX\n\r",(uint32_t)(tx_freq >> 32),(uint32_t)(tx_freq & 0xFFFFFFFF));
-
-                struct pbuf *resp = pbuf_alloc(PBUF_TRANSPORT, 10, PBUF_RAM);
-                if (resp) {
-                    uint8_t *resp_data = (uint8_t*)resp->payload;
-                    resp_data[0] = 0x90;
-                    resp_data[1] = 0x10;
-
-                    for (int i = 0; i < 8; i++) {
-                        resp_data[2 + i] = (tx_freq >> (i * 8)) & 0xFF;
-                    }
-
-                    //xil_printf("[UDP READ TX FREQ] Sending: ");
-                   // for (int i = 0; i < 10; i++) {
-                        //xil_printf("%02X ", resp_data[i]);
-                    //}
-                    //xil_printf("\n\r");
-
-                    udp_sendto(upcb, resp, addr, port);
-                    pbuf_free(resp);
-                }
-            } //else {
-                //xil_printf("[UDP READ TX FREQ] ERROR: needs 2 bytes, got %d\n\r", len);
-           // }
-            break;
-
-//        case 0x08:  // Set GPIO/UF control (WRITE)
-//            if (len == 3) {
-//                uint8_t qt_mask = data[2];
-//
-//                //xil_printf("[UDP GPIO] Received Qt mask: 0x%02X\n\r", qt_mask);
-//                //xil_printf("[UDP GPIO]   bit0 (Power):     %d\n\r", (qt_mask >> 0) & 1);
-//                //xil_printf("[UDP GPIO]   bit1-2 (FreqSel): %d\n\r", (qt_mask >> 1) & 3);
-//                //xil_printf("[UDP GPIO]   bit3 (Tangenta):  %d (%s)\n\r",
-//                           (qt_mask >> 3) & 1,
-//                           (qt_mask & 0x08) ? "PRD" : "PRM");
-//
-//                //  ФОРМИРУЕМ par[40] из маски Qt
-//                uint8_t gpio_val = 0;
-//
-//                // 1. Питание УФ: Qt bit0 → GPIO bit1 (AB_GPIO5R, M14)
-//                if (qt_mask & 0x01) {
-//                    gpio_val |= (1 << 1);
-//                }
-//
-//                // 2. Тангента: Qt bit3 → GPIO bit2 (ПРД) или bit4 (ПРМ)
-//                bool is_prd = (qt_mask & 0x08) != 0;
-//                if (is_prd) {
-//                    gpio_val |= (1 << 2);  // AB_GPIO4R (L15) - ПРД
-//                    gpio_val &= ~(1 << 4); // сбрасываем AB_GPIO2R (ПРМ)
-//                } else {
-//                    gpio_val |= (1 << 4);  // AB_GPIO2R (N15) - ПРМ
-//                    gpio_val &= ~(1 << 2); // сбрасываем AB_GPIO4R (ПРД)
-//                }
-//
-//                // 3. Частотный селектор: Qt bits[2:1] → GPIO bit0 или bit3
-//                uint8_t freq_sel = (qt_mask >> 1) & 0x03;
-//
-//                if (freq_sel == 0) {  // 3400-3600 МГц
-//                    gpio_val |= (1 << 0);  // AB_GPIO6R (M15)
-//                    gpio_val &= ~(1 << 3); // сбрасываем AB_GPIO3R
-//                    //xil_printf("[UDP GPIO] Freq: 3400-3600 MHz\n\r");
-//                } else if (freq_sel == 1) {  // 3700-3900 МГц
-//                    gpio_val |= (1 << 3);  // AB_GPIO3R (N16)
-//                    gpio_val &= ~(1 << 0); // сбрасываем AB_GPIO6R
-//                    //xil_printf("[UDP GPIO] Freq: 3700-3900 MHz\n\r");
-//                } else {
-//                    // Другие индексы - оба в 0
-//                    gpio_val &= ~((1 << 0) | (1 << 3));
-//                    //xil_printf("[UDP GPIO] Freq: NONE\n\r");
-//                }
-//
-//                //xil_printf("[UDP GPIO] Resulting par[40]:\n\r");
-//                //xil_printf("  bit4 (AB_GPIO2R/ПРМ):   %d\n\r", (gpio_val >> 4) & 1);
-//                //xil_printf("  bit3 (AB_GPIO3R/3.7G):  %d\n\r", (gpio_val >> 3) & 1);
-//                //xil_printf("  bit2 (AB_GPIO4R/ПРД):   %d\n\r", (gpio_val >> 2) & 1);
-//                //xil_printf("  bit1 (AB_GPIO5R/POWER): %d\n\r", (gpio_val >> 1) & 1);
-//                //xil_printf("  bit0 (AB_GPIO6R/3.4G):  %d\n\r", (gpio_val >> 0) & 1);
-//
-//                //  ЗАПИСЫВАЕМ в FPGA par[40]
-//                uint8_t d[4] = {0x84, 0x28, gpio_val, 0};  // 0x28 = 40 decimal
-//                no_os_spi_write_and_read_11bit(&desc_tmp, d, 1);
-//
-//                // Проверка readback
-//                usleep(10);
-//                uint8_t r[4] = {0x85, 0x28, 0x00, 0x00};
-//                no_os_spi_write_and_read_11bit(&desc_tmp, r, 1);
-//
-//                if (r[2] == gpio_val) {
-//                    //xil_printf("[UDP GPIO]  par[40] = 0x%02X written successfully\n\r", gpio_val);
-//                } else {
-//                    //xil_printf("[UDP GPIO]  MISMATCH: wrote 0x%02X, read 0x%02X\n\r",
-//                               gpio_val, r[2]);
-//                }
-//            } else {
-//                //xil_printf("[UDP GPIO] ERROR: needs 3 bytes, got %d\n\r", len);
-//            }
-//            break;
-
-        case 0x08:  // Set GPIO/UF control (WRITE)
-            if (len == 3) {
-                uint8_t qt_mask = data[2];
-
-                //xil_printf("[UDP GPIO] Received Qt mask: 0x%02X\n\r", qt_mask);
-                //xil_printf("[UDP GPIO]   bit0 (Power):        %d\n\r", (qt_mask >> 0) & 1);
-                //xil_printf("[UDP GPIO]   bit1-2 (FreqSel):    %d\n\r", (qt_mask >> 1) & 3);
-                //xil_printf("[UDP GPIO]   bit3 (Tangenta):     %d (%s)\n\r",   (qt_mask >> 3) & 1,  (qt_mask & 0x08) ? "PRD" : "PRM");
-
-
-                uint8_t gpio_val = 0;
-
-                // bit 0: uf_pit (питание УФ)
-                if (qt_mask & 0x01) {
-                    gpio_val |= (1 << 0);
-                }
-
-                // bit 1: uf_tangenta (тангента: 0=ПРМ, 1=ПРД)
-                if (qt_mask & 0x08) {  // Qt bit3
-                    gpio_val |= (1 << 1);
-                }
-
-                // bit 2: uf_sel (частотный селектор: 0=3.4-3.6 ГГц, 1=3.7-3.9 ГГц)
-                uint8_t freq_sel = (qt_mask >> 1) & 0x03;
-                if (freq_sel == 1) {  // 3.7-3.9 ГГц
-                    gpio_val |= (1 << 2);
-                }
-                // freq_sel == 0 → bit2 = 0 (3.4-3.6 ГГц)
-
-                // bit 3: uf_tangenta_ena_avt
-                // gpio_val |= (0 << 3);
-
-                //xil_printf("[UDP GPIO] Resulting par[40]:\n\r");
-                //xil_printf("  bit0 (uf_pit):              %d\n\r", (gpio_val >> 0) & 1);
-                //xil_printf("  bit1 (uf_tangenta):         %d (%s)\n\r",    (gpio_val >> 1) & 1,      (gpio_val & 0x02) ? "PRD" : "PRM");
-                //xil_printf("  bit2 (uf_sel):              %d (%s)\n\r",   (gpio_val >> 2) & 1,      (gpio_val & 0x04) ? "3.7-3.9 GHz" : "3.4-3.6 GHz");
-                //xil_printf("  bit3 (uf_tangenta_ena_avt): %d\n\r", (gpio_val >> 3) & 1);
-
-                uint8_t d[4] = {0x84, 0x28, gpio_val, 0};
-                no_os_spi_write_and_read_11bit(&desc_tmp, d, 1);
-
-                usleep(10);
-                uint8_t r[4] = {0x85, 0x28, 0x00, 0x00};
-                no_os_spi_write_and_read_11bit(&desc_tmp, r, 1);
-
-                //if (r[2] == gpio_val) {
-                    //xil_printf("[UDP GPIO]  par[40] = 0x%02X written successfully\n\r", gpio_val);
-                //} else {
-                    //xil_printf("[UDP GPIO]   par[40]: wrote 0x%02X, read 0x%02X\n\r",  gpio_val, r[2]);
-                    //xil_printf("[UDP GPIO] Note: par[40] might be write-only or partially implemented\n\r");
-                //}
-            } //else {
-                //xil_printf("[UDP GPIO] ERROR: needs 3 bytes, got %d\n\r", len);
-            //}
-            break;
-
-
-
-        case 0x11:  // Read RX frequency
-            if (len == 2) {
-                uint64_t rx_freq = 0;
-                ad9361_get_rx_lo_freq(ad9361_phy, &rx_freq);
-
-                //xil_printf("[UDP READ RX] ad9361_get_rx_lo_freq returned 0x%08lX%08lX\n\r",  (uint32_t)(rx_freq >> 32), (uint32_t)(rx_freq & 0xFFFFFFFF));
-
-                struct pbuf *resp = pbuf_alloc(PBUF_TRANSPORT, 10, PBUF_RAM);
-                if (resp) {
-                    uint8_t *resp_data = (uint8_t*)resp->payload;
-                    resp_data[0] = 0x90;
-                    resp_data[1] = 0x11;
-
-                    for (int i = 0; i < 8; i++) {
-                        resp_data[2 + i] = (rx_freq >> (i * 8)) & 0xFF;
-                    }
-
-                    //xil_printf("[UDP READ RX] Sending packet: ");
-                   // for (int i = 0; i < 10; i++) {
-                        //xil_printf("%02X ", resp_data[i]);
-                    //}
-                    //xil_printf("\n\r");
-
-                    udp_sendto(upcb, resp, addr, port);
-                    pbuf_free(resp);
-
-                    //xil_printf("[UDP READ RX] Packet sent\n\r");
-                }
-            } //else {
-                //xil_printf("[UDP] ERROR: Read RX freq needs 2 bytes, got %d\n\r", len);
-            //}
-            break;
-
-
-        case 0x12:  // Read TX attenuation (READ)
-            if (len == 2) {
-                uint32_t atten_mdb = 0;
-                ad9361_get_tx_attenuation(ad9361_phy, 1, &atten_mdb);
-                uint32_t atten_db = atten_mdb / 100;
-
-                //xil_printf("[UDP READ TX ATT] Got %lu dB (%lu mdB)\n\r", atten_db, atten_mdb);
-
-                struct pbuf *resp = pbuf_alloc(PBUF_TRANSPORT, 6, PBUF_RAM);
-                if (resp) {
-                    uint8_t *resp_data = (uint8_t*)resp->payload;
-                    resp_data[0] = 0x90;
-                    resp_data[1] = 0x12;
-
-                    for (int i = 0; i < 4; i++) {
-                        resp_data[2 + i] = (atten_db >> (i * 8)) & 0xFF;
-                    }
-
-                    //xil_printf("[UDP READ TX ATT] Sending: ");
-                    //for (int i = 0; i < 6; i++) {
-                        //xil_printf("%02X ", resp_data[i]);
-                    //}
-                    //xil_printf("\n\r");
-
-                    udp_sendto(upcb, resp, addr, port);
-                    pbuf_free(resp);
-                }
-            } //else {
-                //xil_printf("[UDP READ TX ATT] ERROR: needs 2 bytes, got %d\n\r", len);
-            //}
-            break;
-
-            case 0x13:  // Read FPGA register (par[N])
-                if (len == 3) {
-                    uint8_t par_addr = data[2];
-
-                    if (par_addr < 42) {  // par[0..41]
-                        uint8_t d[4] = {0x85, par_addr, 0x00, 0x00};  // 0x85 = READ
-                        no_os_spi_write_and_read_11bit(&desc_tmp, d, 1);
-
-                        struct pbuf *resp = pbuf_alloc(PBUF_TRANSPORT, 4, PBUF_RAM);
-                        if (resp) {
-                            uint8_t *resp_data = (uint8_t*)resp->payload;
-                            resp_data[0] = 0x90;
-                            resp_data[1] = 0x13;
-                            resp_data[2] = par_addr;
-                            resp_data[3] = d[2];  // прочитанное значение
-
-                            udp_sendto(upcb, resp, addr, port);
-                            pbuf_free(resp);
-
-                            //xil_printf("[UDP] Read FPGA par[%d] = 0x%02X (sent back)\n\r",   par_addr, d[2]);
-                        }
-                    } //else {
-                        //xil_printf("[UDP] ERROR: Invalid par_addr %d (max 41)\n\r", par_addr);
-                   // }
-                } //else {
-                    //xil_printf("[UDP] ERROR: Read FPGA par needs 3 bytes, got %d\n\r", len);
-               // }
-                break;
-
-            default:
-                //xil_printf("[UDP] ERROR: Unknown sub=0x%02X\n\r", sub);
-                break;
-
-            case 0x14:  // Set AD9361 Profile & FHSS mode (WRITE)
-                if (len == 3) {
-                    uint8_t profile_val = data[2];
-
-
-
-
-
-                    // Распаковка битовых полей для отладки
-                    uint8_t profile = profile_val & 0x07;        // биты [2:0]
-                    uint8_t txnrx = (profile_val >> 6) & 0x01;      // биты [7:6]
-
-
-                    ad9361_fastlock_store(ad9361_phy, (bool) txnrx ,(uint32_t) profile );
-
-
-
-                    ////xil_printf("[UDP] AD Profile: par[42] = 0x%02X\n\r", profile_val);
-                    ////xil_printf("  AD9361 profile [2:0] = %d\n\r", ad9361_profile);
-                    ////xil_printf("  FHSS mode [7:6] = %d\n\r", fhss_mode);
-
-                    // Запись в FPGA par[42]
-                    //uint8_t d[4] = {0x84, 42, profile_val, 0};  // 0x84 = WRITE, 42 = адрес регистра
-                    //no_os_spi_write_and_read_11bit(&desc_tmp, d, 1);
-
-                    ////xil_printf("[UDP] Profile written successfully\n\r");
-                } //else {
-                    //xil_printf("[UDP] ERROR: AD Profile needs 3 bytes, got %d\n\r", len);
-              // }
-                break;
-
-            case 0x15:
-            	if (len == 3){
-                    uint8_t fhss = data[2];
-                    uint8_t fhss_toggle = 0;
-
-
-
-                    if (fhss == 0x01) {
-                    	fhss_toggle = 1;
-                    }else
-                    {
-                    	fhss_toggle = 0;
-
-                                  }
-
-
-                    if(fhss_toggle)
-                    {
-
-
-                        uint8_t d[4] = {0x82, 0x5a, 0x03, 0};
-                        no_os_spi_write_and_read(&desc_tmp, d, 1);
-                        d[1] = 0x9a;
-                        no_os_spi_write_and_read(&desc_tmp, d, 1);
-
-                        d[0] =0x84; d[1] = 0x2a; d[2] = 0x40;
-                        no_os_spi_write_and_read_11bit(&desc_tmp, d, 1);
-
-
-                    }
-                    else
-                    {
-
-                    	 uint8_t d[4] = {0x82, 0x5a, 0x00, 0};
-
-                         no_os_spi_write_and_read(&desc_tmp, d, 1);
-                         d[1] = 0x9a;
-                         no_os_spi_write_and_read(&desc_tmp, d, 1);
-
-                         d[0] =0x84; d[1] = 0x2a; d[2] = 0x00;
-                         no_os_spi_write_and_read_11bit(&desc_tmp, d, 1);
-
-                    }
-
-            	}
-
-            	break;
-
-
-
-            	/*
-
-            case 0x16:  // Set RX2 GAIN (WRITE)
-                     if (len == 10) {
-                         uint64_t freq = 0;
-
-                         for (int i = 0; i < 8; i++) {
-                             freq |= ((uint64_t)data[2 + i]) << (i * 8);
-                         }
-
-                         //xil_printf("[UDP TX FREQ] Parsed: 0x%08lX%08lX\n\r", (uint32_t)(freq >> 32),(uint32_t)(freq & 0xFFFFFFFF));
-
-                         if (freq < 70000000ULL || freq > 6000000000ULL) {
-                             //xil_printf("[UDP TX FREQ] ERROR: out of range (70MHz-6GHz)\n\r");
-                             break;
-                         }
-
-                         int32_t result = ad9361_set_tx_lo_freq(ad9361_phy, freq);
-
-                         if (result == 0) {
-                             uint64_t actual_freq = 0;
-                             ad9361_get_tx_lo_freq(ad9361_phy, &actual_freq);
-                             //xil_printf("[UDP TX FREQ] SUCCESS: actual=0x%08lX%08lX\n\r", (uint32_t)(actual_freq >> 32), (uint32_t)(actual_freq & 0xFFFFFFFF));
-                         } //else {
-                             //xil_printf("[UDP TX FREQ] ERROR: ad9361_set_tx_lo_freq returned %ld\n\r", result);
-                         //}
-                     } //else {
-                         //xil_printf("[UDP TX FREQ] ERROR: needs 10 bytes, got %d\n\r", len);
-                     //}
-                     break;
-
-
-            	*/
-
-
-
-
-
-
-
-
-        }
-
-
-
-
-
-
-        //xil_printf("==========================================\n\r\n\r");
-        pbuf_free(p);
-        return;
-    }
-
-
-    else if (len >= 3)
-       {
-           uint16_t ucnt_rx = ((uint16_t)data[0] << 8) | data[1];
-           uint8_t  cmd     = data[2];
-
-           switch (cmd) {
-
-           /* --- 0x05: Установка параметров сетевого фильтра (11 байт) --- */
-           case 0x05:
-               if (len >= 11) {
-                   uint32_t ip_mask = ((uint32_t)data[3] << 24) |
-                                      ((uint32_t)data[4] << 16) |
-                                      ((uint32_t)data[5] << 8)  |
-                                      ((uint32_t)data[6]);
-                   uint8_t arp_en  = data[7];
-                   uint8_t icmp_en = data[8];
-                   uint8_t tcp_en  = data[9];
-                   uint8_t udp_en  = data[10];
-
-                   firewall_set_config(ip_mask, arp_en, icmp_en, tcp_en, udp_en);
-
-                   xil_printf("[CMD 0x05] ucnt=%d mask=%d.%d.%d.%d ARP=%d ICMP=%d TCP=%d UDP=%d\r\n",
-                              ucnt_rx,
-                              (ip_mask >> 24) & 0xFF, (ip_mask >> 16) & 0xFF,
-                              (ip_mask >> 8) & 0xFF,  ip_mask & 0xFF,
-                              arp_en, icmp_en, tcp_en, udp_en);
-               }
-               break;
-
-           /* --- 0x06: Запрос параметров сетевого фильтра (запрос 3 байт, ответ 11 байт) --- */
-           case 0x06:
-           {
-               firewall_config_t cfg = firewall_get_config();
-
-               struct pbuf *resp = pbuf_alloc(PBUF_TRANSPORT, 11, PBUF_RAM);
-               if (resp) {
-                   uint8_t *r = (uint8_t *)resp->payload;
-                   /* ucnt — возвращаем тот же счётчик что пришёл */
-                   r[0] = data[0];
-                   r[1] = data[1];
-                   r[2] = 0x06;
-                   /* ip_mask big-endian */
-                   r[3] = (cfg.ip_mask >> 24) & 0xFF;
-                   r[4] = (cfg.ip_mask >> 16) & 0xFF;
-                   r[5] = (cfg.ip_mask >> 8)  & 0xFF;
-                   r[6] =  cfg.ip_mask        & 0xFF;
-                   r[7]  = cfg.arp_en;
-                   r[8]  = cfg.icmp_en;
-                   r[9]  = cfg.tcp_en;
-                   r[10] = cfg.udp_en;
-
-                   udp_sendto(upcb, resp, addr, port);
-                   pbuf_free(resp);
-
-                   xil_printf("[CMD 0x06] Query from ucnt=%d -> responded\r\n", ucnt_rx);
-               }
-               break;
-           }
-
-           /* --- 0x07: Установка IP через broadcast (15 байт) --- */
-           case 0x07:
-               if (len >= 15) {
-                   /* IP адреса приходят в network byte order (big-endian) */
-                   ip4_addr_t new_ip, new_mask, new_gw;
-
-                   /* Собираем из big-endian в host order, затем используем IP4_ADDR_SET */
-                   uint32_t ip_val = ((uint32_t)data[3]  << 24) | ((uint32_t)data[4]  << 16) |
-                                     ((uint32_t)data[5]  << 8)  | ((uint32_t)data[6]);
-                   uint32_t nm_val = ((uint32_t)data[7]  << 24) | ((uint32_t)data[8]  << 16) |
-                                     ((uint32_t)data[9]  << 8)  | ((uint32_t)data[10]);
-                   uint32_t gw_val = ((uint32_t)data[11] << 24) | ((uint32_t)data[12] << 16) |
-                                     ((uint32_t)data[13] << 8)  | ((uint32_t)data[14]);
-
-                   IP4_ADDR(&new_ip,   (ip_val >> 24) & 0xFF, (ip_val >> 16) & 0xFF,
-                                       (ip_val >> 8)  & 0xFF,  ip_val & 0xFF);
-                   IP4_ADDR(&new_mask, (nm_val >> 24) & 0xFF, (nm_val >> 16) & 0xFF,
-                                       (nm_val >> 8)  & 0xFF,  nm_val & 0xFF);
-                   IP4_ADDR(&new_gw,   (gw_val >> 24) & 0xFF, (gw_val >> 16) & 0xFF,
-                                       (gw_val >> 8)  & 0xFF,  gw_val & 0xFF);
-
-                   netif_set_addr(&bridge_netif, &new_ip, &new_mask, &new_gw);
-
-                   xil_printf("[CMD 0x07] IP changed to %d.%d.%d.%d  mask %d.%d.%d.%d  gw %d.%d.%d.%d\r\n",
-                              (ip_val >> 24) & 0xFF, (ip_val >> 16) & 0xFF,
-                              (ip_val >> 8)  & 0xFF,  ip_val & 0xFF,
-                              (nm_val >> 24) & 0xFF, (nm_val >> 16) & 0xFF,
-                              (nm_val >> 8)  & 0xFF,  nm_val & 0xFF,
-                              (gw_val >> 24) & 0xFF, (gw_val >> 16) & 0xFF,
-                              (gw_val >> 8)  & 0xFF,  gw_val & 0xFF);
-               }
-               break;
-
-           default:
-               break;
-           }
-
-           pbuf_free(p);
-           return;
-       }
-
-       else
-       {
-           pbuf_free(p);
-           return;
-       }
-
-
-
-    //if (len >= 1) {
-    //    func_type = data[0];
-        //xil_printf("[UDP_CMD] func_type = 0x%02X (%d)\n\r", func_type, func_type);
-
-    //    uint16_t par_len = (len - 1) > 16 ? 16 : (len - 1);
-    //    if (par_len > 0) {
-            //xil_printf("[UDP_CMD] func_par[%d]: ", par_len);
-    //        for (int i = 0; i < par_len; i++) {
-    //            func_par[i] = data[i + 1];
-                //xil_printf("%02X ", func_par[i]);
-    //        }
-            //xil_printf("\n\r");
-
-            //xil_printf("[UDP_CMD] func_par (decimal): ");
-           // for (int i = 0; i < par_len; i++) {
-                //xil_printf("%d ", func_par[i]);
-          //  }
-            //xil_printf("\n\r");
-    //    }// else {
-            //xil_printf("[UDP_CMD] No parameters (func_par empty)\n\r");
-       // }
-
-   //     for (int i = par_len; i < 16; i++) {
-   //         func_par[i] = 0;
-   //     }
-
-  //      func_start = true;
-        //xil_printf("[UDP_CMD] Command activated! func_start = TRUE\n\r");
-  //  } //else {
-        //xil_printf("[UDP_CMD] ERROR: Packet too short (len < 1)\n\r");
-  //  }
-
-    //xil_printf("==========================================\n\r\n\r");
- //   pbuf_free(p);
-
-
-
-
-}
-//------------------------------MERGE-------------------------------------------------------------------
 
 
 
@@ -1201,35 +498,56 @@ AD9361_InitParam default_init_param = {
 	/* RF Port Control */
 	1,		//rx_rf_port_input_select *** adi,rx-rf-port-input-select
 	1,		//tx_rf_port_input_select *** adi,tx-rf-port-input-select
-    #else
+   #endif
 
   #ifdef IS_MAKET_PKRV
 	/* RF Port Control */
 	0,		//rx_rf_port_input_select *** adi,rx-rf-port-input-select
 	0,		//tx_rf_port_input_select *** adi,tx-rf-port-input-select
   #endif
-#endif
+
+  #ifdef IS_ZED_BOARD
+   /* RF Port Control */
+   0,		//rx_rf_port_input_select *** adi,rx-rf-port-input-select
+   0,		//tx_rf_port_input_select *** adi,tx-rf-port-input-select
+  #endif
+
+
 
 
 	/* TX Attenuation Control */
-	50000,	//tx_attenuation_mdB *** adi,tx-attenuation-mdB
+	40000, //50000,	//tx_attenuation_mdB *** adi,tx-attenuation-mdB
 	0,		//update_tx_gain_in_alert_enable *** adi,update-tx-gain-in-alert-enable
 
 
-//#ifdef IS_ANTSDR
+#ifdef IS_ANTSDR
 	/* Reference Clock Control */
 	1,		//xo_disable_use_ext_refclk_enable *** adi,xo-disable-use-ext-refclk-enable
-//#else
+#endif
 
-//#ifdef IS_MAKET_PKRV
-//	/* Reference Clock Control */
-//	0,		//xo_disable_use_ext_refclk_enable *** adi,xo-disable-use-ext-refclk-enable
-//#endif
-//#endif
+#ifdef IS_MAKET_PKRV
+	/* Reference Clock Control */
+	1,		//xo_disable_use_ext_refclk_enable *** adi,xo-disable-use-ext-refclk-enable
+#endif
+
+
+#ifdef IS_ZED_BOARD
+	/* Reference Clock Control */
+	0,		//xo_disable_use_ext_refclk_enable *** adi,xo-disable-use-ext-refclk-enable
+#endif
+
 
 	//{8, 2500},	//dcxo_coarse_and_fine_tune[2] *** adi,dcxo-coarse-and-fine-tune
 	{8, 5920},	//dcxo_coarse_and_fine_tune[2] *** adi,dcxo-coarse-and-fine-tune
+
+#ifdef IS_ZED_BOARD
+	CLKOUT_ENABLE,	//clk_output_mode_select *** adi,clk-output-mode-select
+#else
 	CLKOUT_DISABLE,	//clk_output_mode_select *** adi,clk-output-mode-select
+#endif
+
+
+
 	/* Gain Control */
 	1,		//gc_rx1_mode *** adi,gc-rx1-mode
 	1,		//gc_rx2_mode *** adi,gc-rx2-mode
@@ -1382,12 +700,7 @@ AD9361_InitParam default_init_param = {
 	0,		//tx_channel_swap_enable *** adi,tx-channel-swap-enable
 	0,		//rx_channel_swap_enable *** adi,rx-channel-swap-enable
 
-
-
 	1,		//rx_frame_pulse_mode_enable *** adi,rx-frame-pulse-mode-enable
-
-
-
 
 	1,		//two_t_two_r_timing_enable *** adi,2t2r-timing-enable
 	0,		//invert_data_bus_enable *** adi,invert-data-bus-enable
@@ -1641,6 +954,78 @@ bool is_pow_cntrl_tx = false;
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 static void IntrHandler(void *CallBackRef, u32
 Bank, u32 Status)
 {
@@ -1648,12 +1033,12 @@ Bank, u32 Status)
  XGpioPs *Gpioint = (XGpioPs *) CallBackRef;
 
 
-
+ //send_cmd();
 
 if (  ((Status&0x20000000) == 0x20000000)&&(Bank == 3))
 {
   XGpioPs_IntrClearPin(Gpioint, 54+61);
-/*
+
   uint8_t d[] = {0x01,0x61,0x00,0x00};
   no_os_spi_write_and_read(&desc_tmp,&d[0],1);
   //xil_printf("%02X ", d[2]);
@@ -1668,7 +1053,7 @@ if (  ((Status&0x20000000) == 0x20000000)&&(Bank == 3))
   rssi-=d[2];
 
   pow_rx = rssi;
-  is_pow_rx = true; */
+  is_pow_rx = true;
 
  // printf("#1 %.2f dB \n\r", rssi);
 
@@ -1709,10 +1094,10 @@ if (  ((Status&0x10000000) == 0x10000000)&&(Bank == 3))
   rssi-=d[2];
 
   pow_cntrl_tx = rssi;
-  is_pow_cntrl_tx = true; */
+  is_pow_cntrl_tx = true;
 
  // printf("#2 %.2f dB \n\r", rssi);
-
+*/
   return;
 }
 
@@ -1721,14 +1106,11 @@ if (  ((Status&0x10000000) == 0x10000000)&&(Bank == 3))
 if (  ((Status&0x08000000) == 0x08000000)&&(Bank == 3))
 {
  XGpioPs_IntrClearPin(Gpioint, 54+59);
- /*
- is_cntrl_pkt_end = true;*/
+/*
+ is_cntrl_pkt_end = true;
+ */
  return;
 }
-
-
-
-
 
 
 
@@ -1744,7 +1126,7 @@ if (!is_run) return;
 //tx_len<<=8;
 //tx_len+=fpga_regs[13];
 
-
+/*
 
 #ifdef IS_SLAVE
 //if (tx_len == 240000) //SLAVE
@@ -1817,6 +1199,15 @@ if (!is_run) return;
 
 
 
+*/
+
+
+
+
+
+
+ /*
+
 
 #ifdef IS_MASTER
 //if ((fpga_regs[8]&0x80) == 0x80) //MASTER
@@ -1880,8 +1271,11 @@ for (int i = 0; i < size; i++) {
 #endif
 
 
+*/
+
 
 }
+
 
 }
 
@@ -1985,29 +1379,9 @@ for (int i = 0; i < size; i++) {
 //}
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
 static XSysMon XADCMonInst;
-
-
-
 int counter_err = 0;
-
-
-
 struct stat_modem* status_modem;
-
 bool led_tog =true;
 
 
@@ -2015,6 +1389,11 @@ int main()
 {
 
 	status_modem = 	stat_modem_init();
+
+
+	//struct ppos_par tmpp;
+    //tmpp.creg0.word
+
 
 
 	uint8_t cmd_rx_buf[1800];
@@ -2159,6 +1538,52 @@ int main()
 
 
 
+
+
+
+
+
+
+
+    //struct spi_engine_init_param spi_engine_init_par;
+    //spi_engine_init_par.spi_engine_baseaddr =  SPI_ENGINE_AD9361_BASEADDR;
+    //spi_engine_init_par.type = SPI_ENGINE;
+    //spi_engine_init_par.data_width = 8;
+    //spi_engine_init_par.cs_delay = 0;
+    //spi_engine_init_par.ref_clk_hz = 100000000;
+    //spi_engine_init_par.sdo_idle_state = 1;
+
+
+    //struct no_os_spi_init_param no_os_spi_init;
+    //no_os_spi_init.extra = &spi_engine_init_par;
+    ////no_os_spi_init.parent = &spi_eng;
+    //no_os_spi_init.mode=1;//NO_OS_SPI_MODE_1;
+    //no_os_spi_init.device_id = 0;
+    //no_os_spi_init.chip_select = 0;
+
+
+    ////struct no_os_spi_desc*  spi_eng;
+    //spi_engine_init(&spi_eng, &no_os_spi_init);
+
+
+
+    ////uint8_t ppp = 0xf0;
+    ////spi_engine_write_and_read(spi_eng, &ppp, 1);
+
+
+    AXI_CNTRL_REG_WRITE(AXI_CNTRL_REG_BASEADDR, 8, 0x00010000);
+
+
+
+    spi_engine_ad9361_init(&spi_eng_ad9361);
+    //spi_engine_npu_com_board_init(&spi_eng_npu_com_board);
+    //spi_engine_npu_pow_board_init(&spi_eng_npu_pow_board);
+
+
+    XTime_GetTime(&cur_time);
+
+
+
     //uint8_t d[] = {0x80,0x00,0x81,0x00};
     //no_os_spi_write_and_read_11bit(&desc_tmp,&d[0],1);
 
@@ -2166,6 +1591,13 @@ int main()
 
     //d[0]=0x80;d[1]=0x00;d[2]=0x00;
     //no_os_spi_write_and_read_11bit(&desc_tmp,&d[0],1);
+
+    uint8_t d[] = {0x84,0x02,0xc0,0x00};
+
+    //no_os_spi_write_and_read_11bit(&desc_tmp,&d[0],1);
+    //d[0]=0x84;d[1]=0x08;d[2]=0x00;
+    //no_os_spi_write_and_read_11bit(&desc_tmp,&d[0],1);
+
 
 
     ad9361_init(&ad9361_phy, &default_init_param);
@@ -2187,6 +1619,19 @@ int main()
 
 
 
+    XTime_GetTime(&mem_time);
+
+    double tmp_del=(double) mem_time - (double) cur_time;
+    tmp_del=tmp_del/333333333.;
+    printf("Init ad9361 delay = %10.10f s \n\r", tmp_del);
+
+
+
+   spi_engine_npu_com_board_init(&spi_eng_npu_com_board);
+   spi_engine_npu_pow_board_init(&spi_eng_npu_pow_board);
+
+
+
   axi_adc_write((struct axi_adc*) ad9361_phy->rx_adc, 0x00004418, 0x00000002);
   axi_adc_write((struct axi_adc*) ad9361_phy->rx_adc, 0x00004458, 0x00000002);
   axi_adc_write((struct axi_adc*) ad9361_phy->rx_adc, 0x00004498, 0x00000002);
@@ -2194,8 +1639,16 @@ int main()
 
 
 //ad9361
- uint8_t d[] = {0x80,0xfb,0x48,0x00};
- //d[0]=0x80;d[1]=0xfb;d[2]=0x48;
+
+#ifdef IS_ZED_BOARD
+
+  d[0]=0x80; d[1]=0x0a;d[2]=0x12;
+  no_os_spi_write_and_read_11bit(&desc_tmp,&d[0],1);
+
+#endif
+
+
+ d[0]=0x80; d[1]=0xfb ;d[2]=0x48;
  no_os_spi_write_and_read_11bit(&desc_tmp,&d[0],1);
 
  d[0]=0x81;d[1]=0x10;d[2]=0x00;
@@ -2217,6 +1670,12 @@ int main()
  d[0]=0x81;d[1]=0x12;d[2]=0x45;
  no_os_spi_write_and_read_11bit(&desc_tmp,&d[0],1);
 
+
+
+
+
+
+
  //fpga
 #ifdef IS_MASTER
 //par[8],par[9],par[10],par[11] = 0x80,0x124f80
@@ -2226,8 +1685,10 @@ d[0]=0x84;d[1]=0x09;d[2]=0x12;
 no_os_spi_write_and_read_11bit(&desc_tmp,&d[0],1);
 d[0]=0x84;d[1]=0x0a;d[2]=0x4f;
 no_os_spi_write_and_read_11bit(&desc_tmp,&d[0],1);
-d[0]=0x84;d[1]=0x0b;d[2]=0x80;
+d[0]=0x84;d[1]=0x0b;d[2]=0x80; //d[2]=0xe0;
 no_os_spi_write_and_read_11bit(&desc_tmp,&d[0],1);
+
+/*
 //par[12],par[13],par[14],par[15] = 0x12c05dc0
 d[0]=0x84;d[1]=0x0c;d[2]=0x12; // !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 //d[0]=0x84;d[1]=0x0c;d[2]=0x13;  //48064
@@ -2239,6 +1700,19 @@ d[0]=0x84;d[1]=0x0e;d[2]=0x5d;
 no_os_spi_write_and_read_11bit(&desc_tmp,&d[0],1);
 d[0]=0x84;d[1]=0x0f;d[2]=0xc0;
 no_os_spi_write_and_read_11bit(&desc_tmp,&d[0],1);
+*/
+
+
+//par[12],par[13],par[14],par[15] = 0x12c05dc0
+//d[0]=0x84;d[1]=0x0c;d[2]=0x12;
+//no_os_spi_write_and_read_11bit(&desc_tmp,&d[0],1);
+//d[0]=0x84;d[1]=0x0d;d[2]=0xc0;
+//no_os_spi_write_and_read_11bit(&desc_tmp,&d[0],1);
+//d[0]=0x84;d[1]=0x0e;d[2]=0x12;
+//no_os_spi_write_and_read_11bit(&desc_tmp,&d[0],1);
+//d[0]=0x84;d[1]=0x0f;d[2]=0xc0;
+//no_os_spi_write_and_read_11bit(&desc_tmp,&d[0],1);
+
 #endif
 
 
@@ -2252,6 +1726,10 @@ d[0]=0x84;d[1]=0x0a;d[2]=0x4f;
 no_os_spi_write_and_read_11bit(&desc_tmp,&d[0],1);
 d[0]=0x84;d[1]=0x0b;d[2]=0x80;
 no_os_spi_write_and_read_11bit(&desc_tmp,&d[0],1);
+
+
+/*
+
 //par[12],par[13],par[14],par[15] = 0x12c05dc0
 d[0]=0x84;d[1]=0x0e;d[2]=0x12;
 no_os_spi_write_and_read_11bit(&desc_tmp,&d[0],1);
@@ -2263,6 +1741,25 @@ no_os_spi_write_and_read_11bit(&desc_tmp,&d[0],1);
 d[0]=0x84;d[1]=0x0d;d[2]=0xc0; // !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 //d[0]=0x84;d[1]=0x0d;d[2]=0x00;
 no_os_spi_write_and_read_11bit(&desc_tmp,&d[0],1);
+*/
+
+
+
+
+
+//par[12],par[13],par[14],par[15] = 0x12c05dc0
+//d[0]=0x84;d[1]=0x0c;d[2]=0x12;
+//no_os_spi_write_and_read_11bit(&desc_tmp,&d[0],1);
+//d[0]=0x84;d[1]=0x0d;d[2]=0xc0;
+//no_os_spi_write_and_read_11bit(&desc_tmp,&d[0],1);
+//d[0]=0x84;d[1]=0x0e;d[2]=0x12;
+//no_os_spi_write_and_read_11bit(&desc_tmp,&d[0],1);
+//d[0]=0x84;d[1]=0x0f;d[2]=0xc0;
+//no_os_spi_write_and_read_11bit(&desc_tmp,&d[0],1);
+
+
+
+
 #endif
 
 
@@ -2278,36 +1775,36 @@ d[0]=0x84;d[1]=0x14;d[2]=0x02;
 no_os_spi_write_and_read_11bit(&desc_tmp,&d[0],1);
 
 //par[22] = 0x0a
-d[0]=0x84;d[1]=0x16;d[2]=0x0a;
-no_os_spi_write_and_read_11bit(&desc_tmp,&d[0],1);
+//d[0]=0x84;d[1]=0x16;d[2]=0x0a;
+//no_os_spi_write_and_read_11bit(&desc_tmp,&d[0],1);
 
 //par[23] = 0x0a
-d[0]=0x84;d[1]=0x17;d[2]=0x0a;
-no_os_spi_write_and_read_11bit(&desc_tmp,&d[0],1);
+//d[0]=0x84;d[1]=0x17;d[2]=0x0a;
+//no_os_spi_write_and_read_11bit(&desc_tmp,&d[0],1);
 
 
 //pax[2] = 0x99
-d[0]=0x84;d[1]=0x02;d[2]=0xd9;
-no_os_spi_write_and_read_11bit(&desc_tmp,&d[0],1);
+//d[0]=0x84;d[1]=0x02;d[2]=0xd9;
+//no_os_spi_write_and_read_11bit(&desc_tmp,&d[0],1);
 
 //par[16],par[17],par[18],par[19] = 0x07d01194 ( txnrx_setu = 2000, txxnrx_hold = 4500 )
 
-d[0]=0x84;d[1]=0x10;d[2]=0x07;
-no_os_spi_write_and_read_11bit(&desc_tmp,&d[0],1);
+//d[0]=0x84;d[1]=0x10;d[2]=0x07;
+//no_os_spi_write_and_read_11bit(&desc_tmp,&d[0],1);
 
-d[0]=0x84;d[1]=0x11;d[2]=0xd0;
-no_os_spi_write_and_read_11bit(&desc_tmp,&d[0],1);
+//d[0]=0x84;d[1]=0x11;d[2]=0xd0;
+//no_os_spi_write_and_read_11bit(&desc_tmp,&d[0],1);
 
-d[0]=0x84;d[1]=0x12;d[2]=0x11;
-no_os_spi_write_and_read_11bit(&desc_tmp,&d[0],1);
+//d[0]=0x84;d[1]=0x12;d[2]=0x11;
+//no_os_spi_write_and_read_11bit(&desc_tmp,&d[0],1);
 
-d[0]=0x84;d[1]=0x13;d[2]=0x94;
-no_os_spi_write_and_read_11bit(&desc_tmp,&d[0],1);
-
-
+//d[0]=0x84;d[1]=0x13;d[2]=0x94;
+//no_os_spi_write_and_read_11bit(&desc_tmp,&d[0],1);
 
 
 
+
+/*
 
 
 for (uint32_t i=0;i<8;i++){
@@ -2326,6 +1823,59 @@ for (uint32_t i=0;i<8;i++){
 	sleep(0.15);
 
 }
+
+*/
+
+
+
+
+//uint32_t	device_id;
+/** maximum transfer speed */
+//uint32_t	max_speed_hz;
+/** SPI chip select */
+//uint8_t		chip_select;
+/** SPI mode */
+//enum no_os_spi_mode	mode;
+/** SPI bit order */
+//enum no_os_spi_bit_order	bit_order;
+//const struct no_os_spi_platform_ops *platform_ops;
+//struct no_os_platform_spi_delays platform_delays;
+/**  SPI extra parameters (device specific) */
+//void		*extra;
+/** Parent of the device */
+//struct no_os_spi_desc *parent;
+
+//XGpioPs *Gpio;
+
+
+
+//int32_t spi_engine_init(struct no_os_spi_desc **desc,
+//			const struct no_os_spi_init_param *param)
+
+
+
+
+
+
+
+
+
+
+
+
+
+modem_init();
+
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -2348,15 +1898,15 @@ for (uint32_t i=0;i<8;i++){
 
 #ifndef IS_OLD_PAR
 #ifdef IS_MASTER
-    IP4_ADDR(&RemoteAddr, 192, 168, 250, 10);
+    IP4_ADDR(&RemoteAddr, 192, 168, 250, 22);
 #endif
 #ifdef IS_SLAVE
-    IP4_ADDR(&RemoteAddr, 192, 168, 250, 22);
+    IP4_ADDR(&RemoteAddr, 192, 168, 250, 10);
 #endif
 #endif
 
-    firewall_init();
-    lwip_init();
+firewall_init();
+lwip_init();
 
 #ifdef BRIDGE
     net_init();
@@ -2387,12 +1937,14 @@ for (uint32_t i=0;i<8;i++){
 
 
 
+
+
+
     //send_pcb = udp_new();
     recv_pcb = udp_new();
     udp_bind_netif (recv_pcb, &bridge_netif); //&udp_netif2);
-    status = udp_bind(recv_pcb, IP_ADDR_ANY, 5007);
-
-    //status = udp_bind(recv_pcb, &RemoteAddr, 5007);
+    status = udp_bind(recv_pcb,  &bridge_netif.ip_addr, 5008);
+    //status = udp_bind(recv_pcb, &RemoteAddr, 5008);
 
     udp_recv(recv_pcb, recv_callback, NULL);
 
@@ -2404,16 +1956,17 @@ for (uint32_t i=0;i<8;i++){
     debug_pcb = udp_new(); // send status & debug pkts
     udp_bind_netif (debug_pcb, &bridge_netif); //&udp_netif2);
 
+    //status = udp_bind(debug_pcb,  &bridge_netif.ip_addr, CmdPort);
+    //udp_recv(debug_pcb, cmd_udp_callback, NULL);
+
     cmd_udp_pcb = udp_new();
     ip_set_option(cmd_udp_pcb, SOF_BROADCAST);
 
-       //udp_bind_netif(cmd_udp_pcb, &bridge_netif);
-       udp_bind(cmd_udp_pcb, IP_ADDR_ANY, CmdPort);
-       udp_recv(cmd_udp_pcb, cmd_udp_callback, NULL);
-       xil_printf("[INIT] cmd_udp_pcb bound to port %d on bridge_netif\r\n", CmdPort);
+    //udp_bind_netif(cmd_udp_pcb, &bridge_netif);
+    udp_bind(cmd_udp_pcb, IP_ADDR_ANY, CmdPort);
+    udp_recv(cmd_udp_pcb, cmd_udp_callback, NULL);
+    xil_printf("[INIT] cmd_udp_pcb bound to port %d on bridge_netif\r\n", CmdPort);
 
-    //status = udp_bind(debug_pcb, IP_ADDR_ANY, CmdPort);
-    //udp_recv(debug_pcb, cmd_udp_callback, NULL);
 
 
     for (int i=0;i<FIFO_RX_DEPTH;i++) fifo_rx_buf[i].rx_is_val=0;
@@ -2421,97 +1974,406 @@ for (uint32_t i=0;i<8;i++){
 
     //stt = true;
 
-//    ad9361_bist_loopback(ad9361_phy, 1);
-//    xil_printf("!!! WARNING: AD9361 DIGITAL LOOPBACK ENABLED !!!\n\r");
+
+    //tx_chan0.creg0.inside.bod = 2;
+	//tx_chan0.creg0.inside.mod = 2;
+	//tx_chan0.creg0.inside.run = 1;
+
+	//AXI_CNTRL_REG_WRITE(AXI_CNTRL_REG_BASEADDR + TX_CHAN0_PAR_OFFSET, 0, tx_chan0.creg0.word);
+
+
+
+
+
+
+
 
     platform_enable_interrupts();
     is_run = true;
 
     while(1)
-        {
-            //sys_check_timeouts();
-    	//xemacif_input(&port1_bridge);
+    {
 
-            xemacif_input(echo_netif);
 
-        	vid_buf_exch(buf_vid, vid_out);
-        	cmd_buf_exch(buf_cmd, cmd_out);
-
-            // ====================================================================
-            // НОВАЯ ЛОГИКА ПРИЕМА ИЗ РАДИО (FIFO -> Bridge)
-            // ====================================================================
-            if(XLlFifo_iRxOccupancy(&fifo) >= 47)
+    if ( rx_chan0.creg0.inside.pkt_len == 4800 )
             {
-                for(rx_word_idx = 0; rx_word_idx < 47; rx_word_idx++) {
-                    temp_rx_words[rx_word_idx] = XLlFifo_RxGetWord(&fifo);
-                }
+    		  fifo_rx_buf_write(&fifo_rx_buf[0],&fifo_rx_wad, &cmd_rx_buf[0]);
+    		}
 
-                for(rx_word_idx = 0; rx_word_idx < 47; rx_word_idx++) {
-                    u32 w = temp_rx_words[rx_word_idx];
-                    temp_rx_block[rx_word_idx*4 + 0] = (uint8_t)(w & 0xFF);
-                    temp_rx_block[rx_word_idx*4 + 1] = (uint8_t)((w >> 8) & 0xFF);
-                    temp_rx_block[rx_word_idx*4 + 2] = (uint8_t)((w >> 16) & 0xFF);
-                    temp_rx_block[rx_word_idx*4 + 3] = (uint8_t)((w >> 24) & 0xFF);
-                }
-
-                radio_input_block(temp_rx_block, &port3_bridge);
-
-                deb_cnt_rf++;
-            }
-
-            // ====================================================================
-            // СТАРАЯ ЛОГИКА (ОТКЛЮЧЕНА)
-            // ====================================================================
-
-            // fifo_rx_buf_write(&fifo_rx_buf[0],&fifo_rx_wad, &cmd_rx_buf[0]);
-            // #ifdef IS_MASTER
-            //    fifo_rx_buf_check(&fifo_rx_buf[0],&fifo_rx_wad);
-            // #endif
+    if ( rx_chan0.creg0.inside.pkt_len == 576  ) drain_rx_fifo();
 
 
-            radio_tx_periodic_flush();
-
-            //fifo_debug_uart_test(&Uart1_Ps);
-
-        	cnt_uart_rx_buf = uart_cmd_chan(cnt_uart_rx_buf, &buf, &Uart1_Ps, &desc_tmp, &func_start, &func_type, &func_par[0], &fpga_regs[0]);
-        	debug_ram_load(&bufff_cnt, &bufff[0], &Gpio_Ps, &Uart1_Ps);
-        	exec_func(&func_start, func_type, &func_par[0]);
 
 
-        	fifo_deb_read();
 
 
-        	 XTime_GetTime(&cur_time);
+   	if ( tx_chan0.creg0.inside.pkt_len == 4800 )
+    		{
+    		 cmd_buf_exch(buf_cmd, cmd_out);
+    		 send_cmd();
+    		}
 
-        	 if (cur_time - mem_time >= XPAR_CPU_CORTEXA9_0_CPU_CLK_FREQ_HZ )
-        	 {
-                 sys_seconds++;
-                 if (sys_seconds >= 60) {
-                     sys_seconds = 0;
-                     sys_minutes++;
-                     if (sys_minutes >= 60) {
-                         sys_minutes = 0;
-                         sys_hours++;
-                     }
-                 }
+    	if ( tx_chan0.creg0.inside.pkt_len == 576  )
+    	   {
+    		 tx_process();
+    		 radio_tx_periodic_flush();
+    	   }
 
-                 if (bridge_netif.state != NULL) {
-                      void *fdb_ptr = bridgeif_get_dynamic_fdb(&bridge_netif);
-                      if (fdb_ptr != NULL) {
-                          bridgeif_fdb_age(fdb_ptr);
-                      }
-                  }
 
-                 xil_printf("[%02d:%02d:%02d] ETH: %d  RF: %d\r\n",
-                            sys_hours, sys_minutes, sys_seconds,
-                            deb_cnt_br, deb_cnt_rf);
 
-                 radio_stream_print_stats();
 
-        		 mem_time=cur_time;
-        	 }
 
-        }
+
+
+
+
+
+
+  //if (rx_seg_on)
+ // {
+
+
+	 //cmd_buf_exch(buf_cmd, cmd_out);
+	 //radio_tx_periodic_flush();
+     //radio_poll();
+
+     //radio_stream_print_stats();
+
+//	  drain_rx_fifo();
+
+ // }
+ // else
+ // {
+   // send_cmd();
+
+   //vid_buf_exch(buf_vid, vid_out);
+   //cmd_buf_exch(buf_cmd, cmd_out);
+   //fifo_rx_buf_write(&fifo_rx_buf[0],&fifo_rx_wad, &cmd_rx_buf[0]);
+
+   //#ifdef IS_MASTER
+    //fifo_rx_buf_check(&fifo_rx_buf[0],&fifo_rx_wad);
+   //#endif
+
+ // }
+
+
+//    	counter_err++;
+//
+//    	if (counter_err >= 64000) {
+//    		counter_err = 0;
+//
+//    		xil_printf("------------------Debug information------------------------\n\r"
+//    	    				   "Ethernet send: %llu (%llu)\n\r"
+//    	    				   "Ethernet read: %llu\n\r"
+//    	    				   "Buffer write : %llu\n\r"
+//    	    				   "Buffer Read  : %llu (%llu)\n\r"
+//    	    				   "Buffer Formed: %llu (%llu) (%llu/5)\n\r"
+//    	    				   "FIFO send    : %llu (%llu)\n\r"
+//    						   "FIFO read    : %llu (%llu, Bad: %llu)\n\r"
+//    	          	   "-----------------------------------------------------------\n\r",
+//    						   val_send_eth * 5, val_send_eth,
+//							   val_recv_eth,
+//    						   val_buff_write,
+//							   val_buff_read * 5,
+//							   val_buff_read,
+//							   val_group_buf * 5, val_group_buf, err_last_packet(),
+//    						   val_send_fifo * 5, val_send_fifo,
+//							   (val_recv_fifo + val_recv_fifo_wrong) * 5, val_recv_fifo, val_recv_fifo_wrong);
+//  }
+
+
+    	//vid_buf_exch(buf_vid, vid_out);
+    	//cmd_buf_exch(buf_cmd, cmd_out);
+
+    	//fifo_rx_buf_write(&fifo_rx_buf[0],&fifo_rx_wad, &cmd_rx_buf[0]);
+
+//#ifdef IS_MASTER
+
+    	//fifo_rx_buf_check(&fifo_rx_buf[0],&fifo_rx_wad);
+//#endif
+
+    	cnt_uart_rx_buf=uart_cmd_chan(cnt_uart_rx_buf,&buf, &Uart1_Ps, &desc_tmp, &func_start, &func_type, &func_par[0], &fpga_regs[0]);
+    	//tx_seg_on = ((fpga_regs[12]==0x02)&&(fpga_regs[13]==0x40));
+    	//rx_seg_on = ((fpga_regs[14]==0x02)&&(fpga_regs[15]==0x40));
+    	debug_ram_load(&bufff_cnt, &bufff[0], &Gpio_Ps, &Uart1_Ps);
+    	exec_func(&func_start, func_type, &func_par[0]);
+
+#ifdef BRIDGE
+
+         //u8 c =  XUartPs_RecvByte(Uart1_Ps.Config.BaseAddress);
+         //if (c == 'D' || c == 'd') {
+           //  print_dynamic_fdb(&bridge_netif);
+         //}
+
+         //else if (c == 'S' || c == 's') {
+         //    char tmp [5]  = {0x01, 0x02, 0x03, 0x04, 0x04};
+         //    udp2_send_to_pc(&tmp[0], 5);
+         //}
+#endif
+
+    	xemacif_input(echo_netif);
+
+
+    	fifo_deb_read();
+
+
+
+
+    	if (is_pow_rx)
+    		{
+
+    		if (status_modem->status_rx.cnt_pkt == 0)
+    	    		{
+    	    			status_modem->status_rx.max_pow = pow_rx;
+    	    			status_modem->status_rx.min_pow = pow_rx;
+    					status_modem->status_rx.acc_pow = pow_rx;
+    	    		}
+    	    		else
+    	    		{
+    	    			if (status_modem->status_rx.max_pow < pow_rx) status_modem->status_rx.max_pow = pow_rx;
+    	    			if (status_modem->status_rx.min_pow > pow_rx) status_modem->status_rx.min_pow = pow_rx;
+    	    			status_modem->status_rx.acc_pow += pow_rx;
+    	    		}
+
+
+    		status_modem->status_rx.cnt_pkt++;
+
+
+    		is_pow_rx = false;
+    		}
+
+
+
+
+
+
+
+
+
+
+    	if (is_pow_cntrl_tx)
+    		{
+
+    		if (status_modem->status_cntrl_tx.cnt_pkt == 0)
+    		{
+    			status_modem->status_cntrl_tx.max_pow_cntrl = pow_cntrl_tx;
+    			status_modem->status_cntrl_tx.min_pow_cntrl = pow_cntrl_tx;
+				status_modem->status_cntrl_tx.acc_pow_cntrl = pow_cntrl_tx;
+    		}
+    		else
+    		{
+    			if (status_modem->status_cntrl_tx.max_pow_cntrl < pow_cntrl_tx) status_modem->status_cntrl_tx.max_pow_cntrl = pow_cntrl_tx;
+    			if (status_modem->status_cntrl_tx.min_pow_cntrl > pow_cntrl_tx) status_modem->status_cntrl_tx.min_pow_cntrl = pow_cntrl_tx;
+    			status_modem->status_cntrl_tx.acc_pow_cntrl += pow_cntrl_tx;
+    		}
+
+
+    		is_pow_cntrl_tx = false;
+    		}
+
+
+
+
+
+
+
+
+
+    if (is_cntrl_pkt_end)
+    {
+    	//uint8_t dtmpp[] = {0x04,0x25,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00};
+    	//no_os_spi_write_and_read_11bit(&desc_tmp,&dtmpp[0],10);
+
+
+    	uint32_t dat = Xil_In32(RX_CORE_BASEADDR + 0x000000b8);
+
+    	bool is_check = dat&0x00000001;
+    	uint16_t count = dat>>16;
+
+    	bool gap_pkt;
+        if (count == 0) gap_pkt =   status_modem->status_cntrl_tx.last_pkt == 0xffff;
+        else gap_pkt =   status_modem->status_cntrl_tx.last_pkt == count-1;
+
+        status_modem->status_cntrl_tx.last_pkt = count;
+
+        if (!(is_check&gap_pkt))
+		{
+        	status_modem->status_cntrl_tx.cnt_err_pkt++;
+
+
+        	// printf("%08X %08X \n\r", status_modem->status_cntrl_tx.last_dat, dat);
+
+
+
+		}
+
+
+        status_modem->status_cntrl_tx.last_dat = dat;
+
+        status_modem->status_cntrl_tx.cnt_pkt++;
+
+
+        //printf("%08X \n\r", dat);
+
+    	 // Xil_Out32(XPAR_BRAM_0_BASEADDR + 0, 0x2);
+
+		// status_modem->status_cntrl_tx->cnt_pkt = 0;
+		// status_modem->status_cntrl_tx->cnt_err_pkt = 0;
+
+
+   	    //printf("c_pkt =");
+   	  //  for (int k = 0; k<10; k++)
+   	  //  {
+   	   	  // printf("%02X", d[2+k]);
+   	  //  	XUartPs_SendByte(Uart1_Ps.Config.BaseAddress,dtmpp[k+2]);
+      //  }
+
+   	    //printf("\n\r");
+
+    	is_cntrl_pkt_end = false;
+
+    	    	 }
+
+
+
+
+/*
+
+    	 XTime_GetTime(&cur_time);
+
+
+    	 if (cur_time - mem_time >= XPAR_CPU_CORTEXA9_0_CPU_CLK_FREQ_HZ )
+    	    	 {
+    		         print_dynamic_fdb(&bridge_netif);
+
+
+
+
+    		 printf("DEB CNT: %d  %d \n\r",  deb_cnt_br,  deb_cnt_rf);
+
+
+
+    		 mem_time=cur_time;
+    	    	 }
+
+*/
+
+
+    	XTime_GetTime(&cur_time);
+
+
+    	 if (cur_time - mem_time >= XPAR_CPU_CORTEXA9_0_CPU_CLK_FREQ_HZ )
+    	 {
+    		 mem_time=cur_time;
+
+    		 if (led_tog)
+    		 {
+    			 XGpioPs_WritePin(&Gpio_Ps, 14, 0);
+    			 XGpioPs_WritePin(&Gpio_Ps, 15, 0);
+    		 }
+    		 else
+    		 {
+    			 XGpioPs_WritePin(&Gpio_Ps, 14, 1);
+    		     XGpioPs_WritePin(&Gpio_Ps, 15, 1);
+    		 }
+
+    		 led_tog = !led_tog;
+
+    		 int32_t t;
+    		 ad9361_get_temperature(ad9361_phy, &t);
+    		 float tf = 0;
+
+    		 tf = t;
+    		 tf=tf/1000.;
+
+    		 status_modem->TempAD9361 = tf;
+
+    		 //printf("ad9361 temp = %.1f \n\r", tf);
+    		 //xil_printf("ad9361 temp =  %d\n\r", t);
+
+    	     u32 TempRawData;
+    		 float TempData;
+
+    		 TempRawData = XSysMon_GetAdcData(XADCInstPtr, XSM_CH_TEMP);
+    		 TempData    = XSysMon_RawToTemperature(TempRawData);
+    		//xil_printf("Zynq Raw Temp %lu \n\r", TempRawData);
+    		//printf("Zynq Temp = %.1f \n\r", TempData);
+
+    		 status_modem->TempFPGA = TempData;
+
+
+    		 uint8_t d[] = {0x01,0x63,0x00,0x00};
+    		 no_os_spi_write_and_read(&desc_tmp,&d[0],1);
+    		 float pps_pow_cntrl = -d[2];
+    		 pps_pow_cntrl/=4.;
+    		 d[0] = 0x02; d[1] = 0xb5;
+    		 no_os_spi_write_and_read(&desc_tmp,&d[0],1);
+    		 pps_pow_cntrl-=d[2];
+
+    		 status_modem->pps_pow_cntrl = pps_pow_cntrl;
+
+    		 d[0] = 0x01; d[1] = 0x61;
+    		 no_os_spi_write_and_read(&desc_tmp,&d[0],1);
+    		 float pps_pow = -d[2];
+    		 pps_pow/=4.;
+    		 d[0] = 0x02; d[1] = 0xb0;
+    		 no_os_spi_write_and_read(&desc_tmp,&d[0],1);
+    		 pps_pow-=d[2];
+
+    		 status_modem->pps_pow = pps_pow;
+
+    		 d[0] = 0x04; d[1] = 0x29;
+    		 no_os_spi_write_and_read_11bit(&desc_tmp,&d[0],1);
+    	     status_modem->gpio_status = d[2];
+
+
+    	     send_modem_status(status_modem);
+
+
+
+
+    		 //float pps_pow;
+    		 //uint8_t gpio_status;
+
+
+    	     //u32 PLVRawData;
+    		 //float PLVData;
+
+    		 //PLVRawData = XSysMon_GetAdcData(XADCInstPtr, XSM_CH_VCCINT);
+    		 //PLVData    = XSysMon_RawToVoltage(PLVRawData);
+    		 //printf("Zynq VCCINT = %.2f \n\r", PLVData);
+
+    		 //PLVRawData = XSysMon_GetAdcData(XADCInstPtr, XSM_CH_VCCAUX);
+    	     //PLVData    = XSysMon_RawToVoltage(PLVRawData);
+    	     //printf("Zynq VCCAUX = %.2f \n\r", PLVData);
+
+    		 //PLVRawData = XSysMon_GetAdcData(XADCInstPtr, XSM_CH_VBRAM);
+    	     //PLVData    = XSysMon_RawToVoltage(PLVRawData);
+    	     //printf("Zynq VBRAM = %.2f \n\r", PLVData);
+
+
+
+    		 //printf("Ta = %.1f  Tf = %.1f  cnt_pkt_cntrl= %d  cnt_err_pkt_cntrl = %d min_pow_cntrl =  %.1f max_pow_cntrl = %.1f acc_pow_cntrl = %.1f  min_pow =  %.1f max_pow = %.1f acc_pow = %.1f  cnt_pkt= %d  pps_pow_cntrl = %.1f  \n\r",
+    		 //status_modem->TempAD9361, status_modem->TempFPGA , status_modem->status_cntrl_tx->cnt_pkt, status_modem->status_cntrl_tx->cnt_err_pkt,
+			 //status_modem->status_cntrl_tx->min_pow_cntrl, status_modem->status_cntrl_tx->max_pow_cntrl,status_modem->status_cntrl_tx->acc_pow_cntrl,
+			 //status_modem->status_rx->min_pow,             status_modem->status_rx->max_pow,     status_modem->status_rx->acc_pow,
+			 //status_modem->status_rx->cnt_pkt, pps_pow_cntrl);
+
+    		 status_modem->status_cntrl_tx.cnt_pkt = 0;
+    		 status_modem->status_cntrl_tx.cnt_err_pkt = 0;
+
+    		 status_modem->status_rx.cnt_pkt = 0;
+    		 status_modem->status_rx.cnt_err_pkt = 0;
+
+    	 }
+
+
+
+
+
+
+
+    }
 
     cleanup_platform();
     return 0;
@@ -2603,6 +2465,8 @@ void send_modem_status(struct stat_modem* status) {
     }
 
     memcpy((uint8_t*) p->payload, (uint8_t*) status, sizeof(struct stat_modem));
+
+
 
 
 
@@ -2809,7 +2673,8 @@ void fifo_rx_buf_write(struct vid_pkt* rx_buf, uint8_t* rx_wad, uint8_t* cmd_rx_
 
 					if (!is_val)
 			{
-						xil_printf("!is_val \n\r");
+
+						xil_printf("!is_val %08x %08x \n\r",preamb0,preamb1);
 			            return;
 			}
 
@@ -2823,20 +2688,41 @@ void fifo_rx_buf_write(struct vid_pkt* rx_buf, uint8_t* rx_wad, uint8_t* cmd_rx_
 			 if ((size != 0)&&(size<=1518))
 				 {
 				 	   uint8_t check_solve = 0;
-			           for (int k=0; k<size; k++) check_solve+= cmd_rx_buf[29+k];
+			           bool check_empty = false;
+				 	   for (int k=0; k<size; k++)
+			        	   {
+				 		     check_empty = check_empty || cmd_rx_buf[29+k] == 0;
+			        	     check_solve+= cmd_rx_buf[29+k];
+			        	   }
 				       //xil_printf("CMD_REC -> len = %d, check = %d check_solve = %d\n\r", size, check, check_solve);
 
 
-				       if (check == check_solve)
+				       //if (!check_empty&&(check == check_solve))
+				    if (check == check_solve)
 				       {
 				        struct pbuf *p;
 				        p = pbuf_alloc(PBUF_TRANSPORT, size, PBUF_RAM);
 				        memcpy((uint8_t*) p->payload, &cmd_rx_buf[29], size);
 
+
+				         //  struct eth_hdr *ethhdr = (struct eth_hdr*) p->payload;
+					     //  printf("main-> port3_bridge.input: dest:%02X:%02X:%02X:%02X:%02X:%02X, src:%02X:%02X:%02X:%02X:%02X:%02X, type:%04X  len: %4d \n\r",
+					     // (unsigned char)ethhdr->dest.addr[0], (unsigned char)ethhdr->dest.addr[1], (unsigned char)ethhdr->dest.addr[2],
+					     // (unsigned char)ethhdr->dest.addr[3], (unsigned char)ethhdr->dest.addr[4], (unsigned char)ethhdr->dest.addr[5],
+					     // (unsigned char)ethhdr->src.addr[0],  (unsigned char)ethhdr->src.addr[1],  (unsigned char)ethhdr->src.addr[2],
+					     // (unsigned char)ethhdr->src.addr[3],  (unsigned char)ethhdr->src.addr[4],  (unsigned char)ethhdr->src.addr[5],
+					     // lwip_htons(ethhdr->type), p->tot_len  );
+
+
+
+
 						if ( port3_bridge.input(p, &port3_bridge) != ERR_OK) {
 													pbuf_free(p);
 													p = NULL;
 												}
+
+
+
 
 
 				        //port3_bridge.input(p, &port3_bridge);
@@ -2851,6 +2737,131 @@ return;
 
 		}
 
+
+
+
+		else if (ReceiveLength==54)
+				{
+
+
+					RxWord = XLlFifo_RxGetWord(&fifo);
+					preamb0 = RxWord;
+					RxWord = XLlFifo_RxGetWord(&fifo);
+					preamb1 = RxWord;
+
+					memcpy((uint8_t*) &cmd_rx_buf[0],  &preamb0,4);
+					memcpy((uint8_t*) &cmd_rx_buf[0]+4,&preamb1,4);
+
+					is_val = (preamb0 == 0xb6ce261d);
+					is_val = is_val && ((preamb1&0xffff0000) == 0x6d9c0000);
+
+
+					for (int i=2; i < ReceiveLength; i++) {
+									RxWord = XLlFifo_RxGetWord(&fifo);
+									RxWord = swap32(RxWord);
+									//memcpy((u32*) &cmd_rx_buf[0] + i, &RxWord, 4);
+								}
+
+
+							if (!is_val)
+					{
+
+								xil_printf("!p54 is_val %08x %08x \n\r",preamb0,preamb1);
+					            return;
+					}
+
+
+/*
+					 uint8_t check = 0;
+					 uint16_t size;
+					 memcpy(&size,  &cmd_rx_buf[0]+20  ,sizeof(uint16_t) );
+					 memcpy(&check, &cmd_rx_buf[0]+22  ,sizeof(uint8_t) );
+
+					 if ((size != 0)&&(size<=1518))
+						 {
+						 	   uint8_t check_solve = 0;
+					           bool check_empty = false;
+						 	   for (int k=0; k<size; k++)
+					        	   {
+						 		     check_empty = check_empty || cmd_rx_buf[29+k] == 0;
+					        	     check_solve+= cmd_rx_buf[29+k];
+					        	   }
+						       //xil_printf("CMD_REC -> len = %d, check = %d check_solve = %d\n\r", size, check, check_solve);
+
+
+						       //if (!check_empty&&(check == check_solve))
+						    if (check == check_solve)
+						       {
+						        struct pbuf *p;
+						        p = pbuf_alloc(PBUF_TRANSPORT, size, PBUF_RAM);
+						        memcpy((uint8_t*) p->payload, &cmd_rx_buf[29], size);
+
+
+						         //  struct eth_hdr *ethhdr = (struct eth_hdr*) p->payload;
+							     //  printf("main-> port3_bridge.input: dest:%02X:%02X:%02X:%02X:%02X:%02X, src:%02X:%02X:%02X:%02X:%02X:%02X, type:%04X  len: %4d \n\r",
+							     // (unsigned char)ethhdr->dest.addr[0], (unsigned char)ethhdr->dest.addr[1], (unsigned char)ethhdr->dest.addr[2],
+							     // (unsigned char)ethhdr->dest.addr[3], (unsigned char)ethhdr->dest.addr[4], (unsigned char)ethhdr->dest.addr[5],
+							     // (unsigned char)ethhdr->src.addr[0],  (unsigned char)ethhdr->src.addr[1],  (unsigned char)ethhdr->src.addr[2],
+							     // (unsigned char)ethhdr->src.addr[3],  (unsigned char)ethhdr->src.addr[4],  (unsigned char)ethhdr->src.addr[5],
+							     // lwip_htons(ethhdr->type), p->tot_len  );
+
+
+
+
+								if ( port3_bridge.input(p, &port3_bridge) != ERR_OK) {
+															pbuf_free(p);
+															p = NULL;
+														}
+
+
+
+
+
+						        //port3_bridge.input(p, &port3_bridge);
+								//pbuf_free(p);
+
+
+
+						       }
+						 }
+
+						 */
+
+		return;
+
+				}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 		else
 
 
@@ -2860,7 +2871,8 @@ return;
 			//err_inc_recv_fifo_wrong();
 
 
-			xil_printf("! data wrong: ReceiveLength =  %08x\n\r", ReceiveLength);
+			//xil_printf("! data wrong: ReceiveLength =  %08x\n\r", ReceiveLength);
+			xil_printf("%d\n\r", ReceiveLength);
 
 			for (int i=0; i < ReceiveLength; i++) {
 				RxWord = XLlFifo_RxGetWord(&fifo);
@@ -2868,6 +2880,11 @@ return;
 
 			}
 		}
+
+
+
+
+
 	}
 }
 
@@ -3018,7 +3035,7 @@ void fifo_rx_buf_check(struct vid_pkt* rx_buf, uint8_t* rx_wad)
 
 
 
-
+/*
 static u32 uart_cmd_chan(u32 cnt_uart_rx_buf,u32 *buf, XUartPs *uart_ptr, struct no_os_spi_desc *spi_desc_ptr,  bool *func_start, u8 *func_type, u8 *func_par, u8 *fpga_reg)
 {
 	u32 RecvChar;
@@ -3075,6 +3092,76 @@ static u32 uart_cmd_chan(u32 cnt_uart_rx_buf,u32 *buf, XUartPs *uart_ptr, struct
 
 return cnt;
 }
+
+*/
+
+
+
+
+static u32 uart_cmd_chan(u32 cnt_uart_rx_buf, u32 *buf, XUartPs *uart_ptr, struct no_os_spi_desc *spi_desc_ptr,  bool *func_start, u8 *func_type, u8 *func_par, u8 *fpga_reg)
+{
+    u32 RecvChar;
+    u32 cnt = cnt_uart_rx_buf;
+    uint8_t packet[3];
+
+    if (XUartPs_IsReceiveData(uart_ptr->Config.BaseAddress))
+    {
+        RecvChar = XUartPs_ReadReg(uart_ptr->Config.BaseAddress, XUARTPS_FIFO_OFFSET);
+
+        *buf = *buf << 8;
+        *buf += (0x000000ff & RecvChar);
+        cnt++;
+
+        if (cnt == 3)
+        {
+            u32 check_bits = (*buf >> 19) & 0x0F;
+
+            if (check_bits == 0)
+            {
+                packet[0] = (uint8_t)(*buf >> 16);
+                packet[1] = (uint8_t)(*buf >> 8);
+                packet[2] = (uint8_t)(*buf);
+
+                current_cmd_source = CMD_SRC_UART;
+
+                if ((packet[0]&0x07)==0x04) fpga_reg[packet[1]] = packet[2];
+
+                process_cmd_3bytes(packet, uart_ptr, spi_desc_ptr, func_start, func_type, func_par);
+
+                cnt = 0;
+                *buf = 0;
+            }
+            else
+            {
+                 cnt--;
+            }
+        }
+    }
+    return cnt;
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -3137,6 +3224,26 @@ static void exec_func(bool *func_start, u8 func_type, u8 *func_par)
    if (*func_start==true)
    {
 	if (func_type==0)    ad9361_bist_loopback(ad9361_phy, 0x01&(*(func_par+0)));
+
+
+	if (func_type==1)
+
+	{
+		if (*(uint8_t*)func_par == 1) 	ad9361_bist_tone(ad9361_phy, BIST_INJ_TX , 3, 0, 3);
+		if (*(uint8_t*)func_par == 0) 	ad9361_bist_tone(ad9361_phy, BIST_DISABLE , 3, 0, 3);
+
+	}
+
+	/*{
+
+		uint8_t spi_fuf[3] = {0x00,0x37,0x00};
+		if ( spi_engine_write_and_read(spi_eng, &spi_fuf[0], 3) < 0)
+			printf("spi_engine memory allocation failed\n\r", spi_fuf[2]);
+		else if (spi_fuf[2]!=0x0a)
+		    printf("spi_engine_rx_byte: 0x%02X\n\r", spi_fuf[2]);
+
+	}*/
+
 	if (func_type==2)	 ad9361_set_rx_fir_en_dis(ad9361_phy, 0x01&(*(func_par+0)));
 	if (func_type==3)    ad9361_set_rx_rfdc_track_en_dis (ad9361_phy,*(uint8_t*)func_par);
 	if (func_type==4)    ad9361_set_rx_bbdc_track_en_dis (ad9361_phy,*(uint8_t*)func_par);
@@ -3149,8 +3256,41 @@ static void exec_func(bool *func_start, u8 func_type, u8 *func_par)
     if (func_type==11)   ad9361_set_rx_gain_control_mode (ad9361_phy, 0, *(uint8_t*)func_par);
     if (func_type==12)   ad9361_tracking_control (ad9361_phy,*(uint8_t*) func_par,*(uint8_t*)(func_par+1),*(uint8_t*) (func_par+2) );
     if (func_type==13)   ad9361_set_tx_attenuation (ad9361_phy, 1, *(uint32_t*)func_par);
+
     if (func_type == 14) ad9361_fastlock_store(ad9361_phy, (bool)(*func_par >> 7), (uint8_t)*func_par & 0x7);
     if (func_type == 15) ad9361_fastlock_recall(ad9361_phy, (bool)(*func_par >> 7), (uint8_t)*func_par & 0x7);
+
+    if (func_type == 16) print_dynamic_fdb(&bridge_netif);
+
+    if (func_type == 17) spi_engine_npu_com_board_get_status(spi_eng_npu_com_board, &status_modem->status_npu);
+    if (func_type == 18) spi_engine_npu_com_board_set_ena(spi_eng_npu_com_board,*(com_dev_type*) func_par, *(ena_type*)(func_par+1));
+    //if (func_type == 19) spi_engine_npu_pow_board_get_status(spi_eng_npu_pow_board, &status_modem->status_npu);
+    //if (func_type == 20) spi_engine_npu_pow_board_set_ena(spi_eng_npu_pow_board, *(pow_cntrl_type*) func_par, *(ena_type*)(func_par+1) );
+    if (func_type == 19) spi_engine_npu_pow_board_set_f_diap(spi_eng_npu_com_board, spi_eng_npu_pow_board,  *(pow_cntrl_type*) func_par );
+
+    if (func_type == 20)
+    	{
+    	   //xil_printf("func_type_20");
+
+    	   //ppos_set_tangenta(*(ena_type*) func_par);
+
+    	   ppos_set_tangenta(spi_eng_npu_com_board, *(ena_type*) func_par);
+
+    	}
+    if (func_type == 21) spi_engine_npu_pow_board_init(spi_eng_npu_pow_board);
+    if (func_type == 22) spi_engine_npu_com_board_init(spi_eng_npu_com_board);
+
+
+    //if (func_type == 20) spi_engine_npu_com_board_set_sd_on(spi_eng_npu_com_board);
+    //if (func_type == 21) spi_engine_npu_com_board_set_sd_off(spi_eng_npu_com_board);
+    //if (func_type == 22) spi_engine_npu_com_board_set_sd_status(spi_eng_npu_com_board);
+
+
+
+
+
+
+
 
 
     if (func_type==0x80)
@@ -3296,14 +3436,11 @@ void recv_callback(void *arg, struct udp_pcb *upcb, struct pbuf *p, const ip_add
     }
 
 
-    if (is_run == false) {
-            pbuf_free(p);
-            return;
-        }
+
 
     deb_cnt_br++;
 
-    radio_linkoutput(&port3_bridge, p);
+
 
 
 
@@ -3312,21 +3449,21 @@ void recv_callback(void *arg, struct udp_pcb *upcb, struct pbuf *p, const ip_add
 
     //uint16_t dcnt = *((uint16_t*)p->payload);
     //uint8_t  cmd  = ((uint8_t *)p->payload)[2];
-   // u16_t    size = p->len;
+    u16_t    size = p->len;
 
     //xil_printf("CAL%d",size);
 
 
 
     //dcnt  !!!!!!!!!!!!!!!!!!!!!!!!!
-   // if (IsRTTP(p->payload)) {
+    if (IsRTTP(p->payload)) {
 
     	//xil_printf("RTP%d\n\r",size);
 
     	//err_inc_recv_eth();
-    	//if (size<=1212) vid_push(&buf_vid, p->payload, size);
+    	if (size<=1212) vid_push(&buf_vid, p->payload, size);
     	//XTime_GetTime(&last_response_time);
-   // }
+    }
 	//free(data);
   	pbuf_free(p);
     return;
@@ -3359,6 +3496,7 @@ unsigned short swap16(unsigned short value) {
 
 
 int init_tx_rx_fifo() {
+
     XLlFifo_Config fifo_cfg = {FIFO_RX_DEV_BASE_ADDR};
     int status = XLlFifo_CfgInitialize(&fifo, &fifo_cfg, FIFO_RX_DEV_BASE_ADDR);
     if (status != XST_SUCCESS) {
@@ -3381,6 +3519,129 @@ int init_deb_fifo() {
     XLlFifo_Reset(&fifo_deb);
     return XST_SUCCESS;
 }
+
+
+
+
+// Универсальная функция отправки байта
+void send_response_byte(XUartPs *uart_ptr, u8 byte) {
+    if (current_cmd_source == CMD_SRC_UART) {
+        if (uart_ptr) {
+            XUartPs_SendByte(uart_ptr->Config.BaseAddress, byte);
+        }
+    } else {
+        if (global_reply_pcb) {
+            struct pbuf *p = pbuf_alloc(PBUF_TRANSPORT, 1, PBUF_RAM);
+            if (p) {
+                *((u8*)p->payload) = byte;
+                udp_sendto(global_reply_pcb, p, &last_client_ip, last_client_port);
+                pbuf_free(p);
+            }
+        }
+    }
+}
+
+void process_cmd_3bytes(uint8_t *data, XUartPs *uart_ptr, struct no_os_spi_desc *spi_desc_ptr, bool *func_start, u8 *func_type, u8 *func_par)
+{
+    if((data[0] & 0x07) <= 0x04)
+    {
+         no_os_spi_write_and_read_11bit(spi_desc_ptr, &data[0], 0x1);
+
+         if ((data[0] & 0x80) == 0) {
+             send_response_byte(uart_ptr, data[2]);
+         }
+
+
+        // if ((data[0]&0x07)==0x04) fpga_reg[data[1]] = data[2];
+    }
+
+    if((data[0] & 0x07) > 0x04)
+    {
+          if ((data[0]==0x86) && (data[1]==0x01))
+              *func_type = data[2];
+
+          if ((data[0]==0x86) && (data[1]>=0x02) && (data[1]<0x12))
+              func_par[data[1]-0x02] = data[2];
+
+          if ((data[0]==0x86) && (data[1]==0x00))
+              *func_start = ((data[2] & 0x01) == 0x01);
+    }
+}
+
+
+
+
+void send_cmd()
+{
+
+
+  struct ppos_tx ppos_tx_par;
+  ppos_tx_par.creg0.word = AXI_CNTRL_REG_READ(AXI_CNTRL_REG_BASEADDR + TX_CHAN0_PAR_OFFSET, 0);
+
+
+    if (ppos_tx_par.creg0.inside.run == 0)
+   {
+
+	   XLlFifo_IntClear(&fifo, 0xFFFFFFFF);
+	   XLlFifo_Reset(&fifo);
+	   ppos_tx_par.creg0.inside.run = 1;
+	   AXI_CNTRL_REG_WRITE(AXI_CNTRL_REG_BASEADDR + TX_CHAN0_PAR_OFFSET, 0, ppos_tx_par.creg0.word);
+       return;
+   }
+
+
+
+
+ if (ppos_tx_par.creg0.inside.run == 1) {
+
+
+u32 size = 450;
+u32 fifo_size = XLlFifo_iTxVacancy(&fifo);
+
+if (fifo_size >= size   ) {
+ struct  cmd_pkt* output;
+
+ if (cmd_out->is_data) output = cmd_out->pkt;
+ else return;
+
+ uint16_t sw_cnt_s_pkt = swap16(cnt_s_pkt);
+
+ memcpy((uint8_t*)output + 6, &sw_cnt_s_pkt , sizeof(uint16_t));
+ cnt_s_pkt+=1;
+
+u32 word;
+u32 check = 0;
+
+
+for (int i = 0; i < size; i++) {
+
+			 memcpy(&word, (uint8_t*)output + (i * 4), sizeof(word));
+
+			 if (i == size - 1)
+			 {
+				 XLlFifo_TxPutWord(&fifo, check);
+			 }
+			 else
+			 {
+				 word = swap32(word);
+				 check+=word;
+			     XLlFifo_TxPutWord(&fifo, word);
+			 }
+		 }
+
+ XLlFifo_iTxSetLen(&fifo, (size)*4);
+ cmd_out->is_data = false;
+
+ }
+	   }
+
+
+
+
+ return;
+
+}
+
 
 
 

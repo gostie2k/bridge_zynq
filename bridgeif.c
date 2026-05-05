@@ -322,6 +322,7 @@ bridgeif_output(struct netif *netif, struct pbuf *p)
     //      eth->src.addr[3], eth->src.addr[4], eth->src.addr[5],
     //      ntohs(eth->type), p->tot_len);
   bridgeif_portmask_t dstports = bridgeif_find_dst_ports(br, dst);
+  p->if_idx = 0xff;
   err = bridgeif_send_to_ports(br, p, dstports);
 
   MIB2_STATS_NETIF_ADD(netif, ifoutoctets, p->tot_len);
@@ -386,6 +387,9 @@ bridgeif_input(struct pbuf *p, struct netif *netif)
     if (dstports & (1 << BRIDGEIF_MAX_PORTS)) {
       /* we pass the reference to ->input or have to free it */
       LWIP_DEBUGF(BRIDGEIF_FW_DEBUG, ("br -> input(%p)\n\r", (void *)p));
+
+
+
       if (br->netif->input(p, br->netif) != ERR_OK) {
         pbuf_free(p);
       }
