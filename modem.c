@@ -439,116 +439,110 @@ void spi_engine_npu_pow_board_init(struct no_os_spi_desc** spi_eng)
 void ppos_set_tangenta(struct no_os_spi_desc*  spi_eng, ena_type ena)
 {
     ppos.creg2.inside.Tang = ena;
-    AXI_CNTRL_REG_WRITE(AXI_CNTRL_REG_BASEADDR, 8, ppos.creg2.word);
-
-
-
-
-//	uint8_t typ_1 = 0x01&ena;
-//	uint8_t typ_0 = 0x01&(~ena);
-//
-//	uint8_t tx_buf[2];
-//
-//	tx_buf[0] =  0x3E;
-//	tx_buf[1] =  typ_1;
-//	spi_engine_write_and_read(spi_eng,(uint8_t *)&tx_buf, 2);
-//
-//	tx_buf[0] =  0x3F;
-//	tx_buf[1] =  typ_0;
-//	spi_engine_write_and_read(spi_eng,(uint8_t *)&tx_buf, 2);
-
-
+    creg_sync(CREG_GROUP_BASE, 2);
 }
 
 
+/* ===================================================================
+ *  CREG access — table-driven RAM↔PL bridge
+ * =================================================================== */
 
+typedef struct {
+    uint32_t    base_offset;
+    uint8_t     num_cregs;
+    const char *name;
+} creg_block_t;
 
+static const creg_block_t creg_blocks[CREG_GROUP_COUNT] = {
+    [CREG_GROUP_BASE]     = { BASE_PAR_OFFSET,     BASE_PAR_NUM_CREGS, "ppos"     },
+    [CREG_GROUP_TX_CHAN0] = { TX_CHAN0_PAR_OFFSET, TX_CHAN0_NUM_CREGS, "tx_chan0" },
+    [CREG_GROUP_RX_CHAN0] = { RX_CHAN0_PAR_OFFSET, RX_CHAN0_NUM_CREGS, "rx_chan0" },
+};
 
-
-
-
-
-
-
-
- /*
-
- void spi_engine_npu_com_board_set_sd_on(struct no_os_spi_desc*  spi_eng)
+/* RAM mirror access. The first N fields of each struct are 32-bit
+ * unions laid out contiguously (#pragma pack(1)), so [idx] indexes
+ * the same word the PL sees at base_offset + idx*4. */
+static uint32_t *creg_ram_ptr(creg_group_t group, uint8_t idx)
 {
-        uint8_t tx_buf[2];
-		tx_buf[0] =  0x04;
-		tx_buf[1] =  0x00;
-		spi_engine_write_and_read(spi_eng,(uint8_t *)&tx_buf, 2);
+    if (group >= CREG_GROUP_COUNT) return NULL;
+    if (idx   >= creg_blocks[group].num_cregs) return NULL;
+    switch (group) {
+        case CREG_GROUP_BASE:     return &((uint32_t *)&ppos)[idx];
+        case CREG_GROUP_TX_CHAN0: return &((uint32_t *)&tx_chan0)[idx];
+        case CREG_GROUP_RX_CHAN0: return &((uint32_t *)&rx_chan0)[idx];
+        default:                  return NULL;
+    }
 }
 
- void spi_engine_npu_com_board_set_sd_off(struct no_os_spi_desc*  spi_eng)
+void creg_sync(creg_group_t group, uint8_t idx)
 {
-        uint8_t tx_buf[2];
-		tx_buf[0] =  0x04;
-		tx_buf[1] =  0x01;
-		spi_engine_write_and_read(spi_eng,(uint8_t *)&tx_buf, 2);
+    uint32_t *ram = creg_ram_ptr(group, idx);
+    if (!ram) return;
+    AXI_CNTRL_REG_WRITE(AXI_CNTRL_REG_BASEADDR + creg_blocks[group].base_offset,
+                        idx * 4, *ram);
 }
 
- void spi_engine_npu_com_board_set_sd_status(struct no_os_spi_desc*  spi_eng)
+/* AD9361 side-effects: dispatched by (group, idx) when creg is applied. */
+static void cb_tx_lo_freq(uint32_t word)
 {
-        uint8_t tx_buf[2];
-		tx_buf[0] =  0x84;
-		tx_buf[1] =  0x00;
-		spi_engine_write_and_read(spi_eng,(uint8_t *)&tx_buf, 2);
-
-		//tx_buf[0] =  0x00;
-		//tx_buf[1] =  0x00;
-		//spi_engine_write_and_read(spi_eng,(uint8_t *)&tx_buf, 2);
-
-		xil_printf("com_board_set_sd_status = %02X \n\r ", tx_buf[1]);
+    /* word is freq in kHz; AD9361 API takes Hz. */
+    ad9361_set_tx_lo_freq(ad9361_phy, (uint64_t)word * 1000);
 }
-
-
-
-
- void spi_engine_npu_pow_board_get_status(struct no_os_spi_desc*  spi_eng, struct stat_npu* status_npu)
+static void cb_rx_lo_freq(uint32_t word)
 {
-
-	uint8_t tx_buf[2];
-	tx_buf[0] = 0xA4;
-	tx_buf[1] = 0x00;
-	spi_engine_write_and_read(spi_eng,(uint8_t *)&tx_buf, 2);
-
-	status_npu->cntrl_temp_filt_board = 0x01&tx_buf[1];
-
+    ad9361_set_rx_lo_freq(ad9361_phy, (uint64_t)word * 1000);
 }
-
-
-
- void spi_engine_npu_pow_board_set_ena(struct no_os_spi_desc*  spi_eng, pow_cntrl_type cntrl_type,  ena_type ena )
+static void cb_tx_atten(uint32_t word)
 {
-
-   uint8_t tx_buf[2];
-   if ( cntrl_type == UF_DIAP_1 ) //    1
-   {
-		tx_buf[0] = 0x25;
-		tx_buf[1] = ena;
-		spi_engine_write_and_read(spi_eng,(uint8_t *)&tx_buf, 2);
-   }
-
-   if ( cntrl_type == UF_PIT )    //
-   {
-		tx_buf[0] = 0x26;
-		tx_buf[1] = ena;
-		spi_engine_write_and_read(spi_eng,(uint8_t *)&tx_buf, 2);
-   }
-
-   if ( cntrl_type ==  UF_DIAP_2 ) //    2
-   {
-		tx_buf[0] = 0x27;
-		tx_buf[1] = ena;
-		spi_engine_write_and_read(spi_eng,(uint8_t *)&tx_buf, 2);
-   }
-
+    /* low 10 bits = atten in 250-mdB units. */
+    ad9361_set_tx_attenuation(ad9361_phy, 1, (word & 0x3FF) * 250);
 }
 
+typedef void (*creg_cb_t)(uint32_t);
 
-*/
+#define CREG_MAX_PER_BLOCK 8
+static const creg_cb_t creg_ad9361_cbs[CREG_GROUP_COUNT][CREG_MAX_PER_BLOCK] = {
+    [CREG_GROUP_TX_CHAN0] = {
+        [2] = cb_tx_lo_freq,
+        [3] = cb_tx_atten,
+    },
+    [CREG_GROUP_RX_CHAN0] = {
+        [1] = cb_rx_lo_freq,
+    },
+};
+
+/* TX/RX creg0: bit 12 ('run') is forced to 0 on every reconfigure so
+ * PL halts cleanly. send-path re-enables it lazily. */
+#define CREG0_RUN_MASK    (1u << 12)
+
+/* TX creg3: only low 10 bits are atten; reserved bits must stay 0. */
+#define TX_CREG3_VALID    0x3FFu
+
+static uint32_t creg_pre_write_fixup(creg_group_t group, uint8_t idx, uint32_t word)
+{
+    if (idx == 0 &&
+        (group == CREG_GROUP_TX_CHAN0 || group == CREG_GROUP_RX_CHAN0))
+        word &= ~CREG0_RUN_MASK;
+
+    if (group == CREG_GROUP_TX_CHAN0 && idx == 3)
+        word &= TX_CREG3_VALID;
+
+    return word;
+}
+
+void creg_apply(creg_group_t group, uint8_t idx, uint32_t word)
+{
+    uint32_t *ram = creg_ram_ptr(group, idx);
+    if (!ram) return;
+
+    word = creg_pre_write_fixup(group, idx, word);
+    *ram = word;
+    AXI_CNTRL_REG_WRITE(AXI_CNTRL_REG_BASEADDR + creg_blocks[group].base_offset,
+                        idx * 4, word);
+
+    creg_cb_t cb = creg_ad9361_cbs[group][idx];
+    if (cb) cb(word);
+}
 
 
  void modem_init()
@@ -571,14 +565,14 @@ void ppos_set_tangenta(struct no_os_spi_desc*  spi_eng, ena_type ena)
 	 ppos.creg2.inside.Tang_avt = 0;
 	 ppos.creg2.inside.GPIOnR_TYPE = 1;
 
-     AXI_CNTRL_REG_WRITE(AXI_CNTRL_REG_BASEADDR, 8, ppos.creg2.word);
+     creg_sync(CREG_GROUP_BASE, 2);
 
 
 
 	 ppos.creg4.inside.txnrx_setup = 2000;
 	 ppos.creg4.inside.txnrx_hold =  4500;
 
-	 AXI_CNTRL_REG_WRITE(AXI_CNTRL_REG_BASEADDR, 16, ppos.creg4.word);
+	 creg_sync(CREG_GROUP_BASE, 4);
 
      ppos.status_on = 0;
      ppos.status_ip[0] = 192;
@@ -608,24 +602,14 @@ void ppos_set_tangenta(struct no_os_spi_desc*  spi_eng, ena_type ena)
 	 tx_chan0.creg0.inside.scr_on = 1;
 	 tx_chan0.creg0.inside.run = 0;
 
-	 AXI_CNTRL_REG_WRITE(AXI_CNTRL_REG_BASEADDR + TX_CHAN0_PAR_OFFSET, 0, tx_chan0.creg0.word);
+	 creg_sync(CREG_GROUP_TX_CHAN0, 0);
 
 
-  	 tx_chan0.creg2.inside.ad9361_tx_freq = 3500000;//kHz
-  	 AXI_CNTRL_REG_WRITE(AXI_CNTRL_REG_BASEADDR + TX_CHAN0_PAR_OFFSET, 2*4,  (u32) tx_chan0.creg2.word);
+  	 tx_chan0.creg2.inside.ad9361_tx_freq = 3500000; /* kHz */
+  	 creg_apply(CREG_GROUP_TX_CHAN0, 2, tx_chan0.creg2.word);
 
-  	 uint64_t freq =  tx_chan0.creg2.word;
-  	 freq = freq*1000;
-  	 ad9361_set_tx_lo_freq (ad9361_phy, freq);
-
-
-  	 tx_chan0.creg3.inside.ad9361_tx_atten = 0x000003ff&(40000/250); //mdB/250  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!   Tx2
-  	 AXI_CNTRL_REG_WRITE(AXI_CNTRL_REG_BASEADDR + TX_CHAN0_PAR_OFFSET, 3*4,  (u32) tx_chan0.creg3.word);
-
-     uint32_t atten =  tx_chan0.creg3.inside.ad9361_tx_atten;
-     atten*=250;
-
-  	 ad9361_set_tx_attenuation (ad9361_phy, 1, atten);
+  	 tx_chan0.creg3.inside.ad9361_tx_atten = 40000 / 250; /* mdB / 250 */
+  	 creg_apply(CREG_GROUP_TX_CHAN0, 3, tx_chan0.creg3.word);
 
 
 
@@ -640,57 +624,18 @@ void ppos_set_tangenta(struct no_os_spi_desc*  spi_eng, ena_type ena)
 
 	 rx_chan0.creg0.inside.run = 0;
 
-	 AXI_CNTRL_REG_WRITE(AXI_CNTRL_REG_BASEADDR + RX_CHAN0_PAR_OFFSET, 0, rx_chan0.creg0.word);
+	 creg_sync(CREG_GROUP_RX_CHAN0, 0);
 
-
- 	 rx_chan0.creg1.inside.ad9361_rx_freq = 3500000;
-     AXI_CNTRL_REG_WRITE(AXI_CNTRL_REG_BASEADDR + RX_CHAN0_PAR_OFFSET, 1*4,  (u32) rx_chan0.creg1.word);
-
-     freq =  rx_chan0.creg1.word;
-     freq = freq*1000;
-     ad9361_set_rx_lo_freq (ad9361_phy, freq);
+ 	 rx_chan0.creg1.inside.ad9361_rx_freq = 3500000; /* kHz */
+ 	 creg_apply(CREG_GROUP_RX_CHAN0, 1, rx_chan0.creg1.word);
 
 
 
 
 #ifdef IS_ZED_BOARD
-
-  //d[0]=0x80; d[1]=0x0a;d[2]=0x12;
-  //no_os_spi_write_and_read_11bit(&desc_tmp,&d[0],1);
-
 	 ad9361_set_rx_lo_freq (ad9361_phy,3500040000);
 	 ad9361_set_tx_lo_freq (ad9361_phy,3500040000);
-
 #endif
 
  }
-
-
-
-/*
-
- void send_modem_status(struct stat_modem* status) {
-
-
- 	udp_bind_netif (debug_pcb, &bridge_netif);
-
-     struct pbuf *p = pbuf_alloc(PBUF_TRANSPORT, sizeof(struct stat_modem), PBUF_RAM);
-     if (!p) {
-         xil_printf("Failed to allocate pbuf for deb packet\n\r");
-         return;
-     }
-
-     memcpy((uint8_t*) p->payload, (uint8_t*) status, sizeof(struct stat_modem));
-
-     err_t out = udp_sendto(debug_pcb, p, &RemoteAddr, RemotePortStatus);
-
-     if (out != ERR_OK) {
-         xil_printf("Error udp_sendto debug_pcb: %d\n\r", out);
-     }
-
-     pbuf_free(p);
- }
-
-*/
-
 

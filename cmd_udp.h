@@ -1,12 +1,3 @@
-//#pragma once
-//
-//#include "lwip/udp.h"
-//#include "lwip/ip_addr.h"
-//
-//// UDP-обработчик команд протокола 0x90
-//// Регистрировать через: udp_recv(cmd_udp_pcb, cmd_udp_callback, NULL);
-//void cmd_udp_callback(void *arg, struct udp_pcb *upcb,
-//                      struct pbuf *p, const ip_addr_t *addr, u16_t port);
 #pragma once
 
 #include "lwip/udp.h"
@@ -36,9 +27,7 @@
   #define LOG2(fmt, ...)  ((void)0)
 #endif
 
-/* UDP command handler (protocol 0x90 + legacy ucnt protocol) */
+/* UDP command handler: dispatches 0xA0 (cregs), 0x90 (legacy proto),
+ * and ucnt-prefixed legacy commands (firewall, IP). */
 void cmd_udp_callback(void *arg, struct udp_pcb *upcb,
                       struct pbuf *p, const ip_addr_t *addr, u16_t port);
-
-static void handle_creg_exch(struct udp_pcb *upcb, uint8_t *data,
-                          uint16_t len, const ip_addr_t *addr, u16_t port);

@@ -126,6 +126,19 @@ err_t vport3_linkoutput(struct netif *netif, struct pbuf *p) {
 	 struct eth_hdr *ethhdr = (struct eth_hdr*)p->payload;
      err_t out = ERR_OK;
 
+     // ===== DBG #1 =====
+     	{
+     		static int n1 = 0;
+     		if (p->tot_len > 1000 && (n1++ % 50) == 0) {
+     			uint8_t *d = (uint8_t*)p->payload;
+     			xil_printf("[M-TX1] tot=%d len=%d  %02X%02X%02X%02X%02X%02X %02X%02X%02X%02X%02X%02X %02X%02X\r\n",
+     				p->tot_len, p->len,
+     				d[0],d[1],d[2],d[3],d[4],d[5],
+     				d[6],d[7],d[8],d[9],d[10],d[11],
+     				d[12],d[13]);
+     		}
+     	}
+     	// ===== END =====
 
 	if (DEB_FUNC)
 	{

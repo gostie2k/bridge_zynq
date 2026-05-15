@@ -59,6 +59,7 @@
 #include "axi_cntrl_reg/axi_cntrl_reg.h"
 #include "netif/bridgeif.h"
 #include "firewall.h"
+#include "watchdog.h"
 
 
 //struct circular_buffer_a;
@@ -1387,6 +1388,9 @@ bool led_tog =true;
 
 int main()
 {
+	/* Прочитать SLCR.REBOOT_STATUS до любого ресета регистров.
+	 * Покажет в логе, был ли последний ресет от watchdog. */
+	wdt_capture_reboot_status();
 
 	status_modem = 	stat_modem_init();
 
@@ -1991,8 +1995,16 @@ lwip_init();
     platform_enable_interrupts();
     is_run = true;
 
+    /* Запускаем watchdog последним шагом — все init'ы выполнены,
+     * иначе долгий init (AD9361, FIFO reset и т.п.) может задавить таймер.
+     * GIC уже инициализирован в knk_init_platform → init_ScuGic. */
+    if (wdt_init((struct XScuGic *)&ScuGic) == 0) {
+        wdt_start();
+    }
+
     while(1)
     {
+    wdt_hb_main();
 
 
     if ( rx_chan0.creg0.inside.pkt_len == 4800 )
@@ -2112,6 +2124,7 @@ lwip_init();
 #endif
 
     	xemacif_input(echo_netif);
+    	wdt_hb_lwip();
 
 
     	fifo_deb_read();
@@ -2370,7 +2383,7 @@ lwip_init();
 
 
 
-
+    	wdt_kick();
 
 
     }

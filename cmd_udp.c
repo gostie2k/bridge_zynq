@@ -9,6 +9,7 @@
 #include "radio_stream.h"
 #include "modem.h"
 #include "firewall.h"
+#include "watchdog.h"
 #include "lwip/pbuf.h"
 #include "lwip/udp.h"
 #include "lwip/ip_addr.h"
@@ -27,7 +28,10 @@ extern struct ad9361_rf_phy    *ad9361_phy;
 extern struct no_os_spi_desc    desc_tmp;
 
 extern struct ppos_tx tx_chan0;
-extern struct ppos_tx rx_chan0;
+extern struct ppos_rx rx_chan0;
+
+static void handle_creg_exch(struct udp_pcb *upcb, uint8_t *data,
+                             uint16_t len, const ip_addr_t *addr, u16_t port);
 
 /* ===================================================================
  *  Helpers
@@ -521,6 +525,76 @@ static void handle_proto_0x90(struct udp_pcb *upcb, uint8_t *data,
         break;
     }
 
+    /* ==================== Watchdog diagnostics ==================== */
+
+    case 0x40: {  /* Read watchdog stats
+                   * Response payload after [0x90][0x40]:
+                   *   [2..5]  reboot_status (SLCR)
+                   *   [6]     wdt_reset_flag (0/1)
+                   *   [7]     reserved
+                   *   [8..11] kick_count
+                   *   [12..15] starve_count
+                   *   [16..19] last_starve_mask
+                   *   [20..23] uptime_sec
+                   */
+        wdt_stats_t st;
+        wdt_get_stats(&st);
+        struct pbuf *pb = resp_alloc(0x40, 24);
+        if (!pb) break;
+        uint8_t *d = (uint8_t *)pb->payload;
+        put_le32(d + 2,  st.reboot_status);
+        d[6] = (uint8_t)st.wdt_reset_flag;
+        d[7] = 0;
+        put_le32(d + 8,  st.kick_count);
+        put_le32(d + 12, st.starve_count);
+        put_le32(d + 16, st.last_starve_mask);
+        put_le32(d + 20, st.uptime_sec);
+        resp_send(upcb, pb, addr, port);
+        LOG1("[CMD 0x40] WDT stats: uptime=%lu kick=%lu starve=%lu mask=0x%02X\r\n",
+             st.uptime_sec, st.kick_count, st.starve_count,
+             (unsigned)st.last_starve_mask);
+        break;
+    }
+
+    case 0x41: {  /* Simulate hang (для тестирования WDT).
+                   * Payload: [2] = magic 0x5A — защита от случайного вызова.
+                   * Ответ отправляется ДО hang'а.
+                   */
+        if (len < 3 || data[2] != 0x5A) {
+            LOG1("[CMD 0x41] bad magic\r\n");
+            break;
+        }
+        struct pbuf *pb = resp_alloc(0x41, 3);
+        if (pb) {
+            ((uint8_t *)pb->payload)[2] = 0x01;  /* will hang */
+            resp_send(upcb, pb, addr, port);
+        }
+        LOG1("[CMD 0x41] simulating hang — system will reset\r\n");
+        wdt_simulate_hang();
+        /* unreachable */
+        break;
+    }
+
+    case 0x42: {  /* Direct SLCR soft reset (bypass WDT/ISR).
+                   * Payload: [2] = magic 0xA5 — защита от случайного вызова.
+                   * Используется для диагностики: если PS ребутается от 0x42
+                   * но не от 0x41 — проблема в WDT-ISR пути, а не в SLCR.
+                   */
+        if (len < 3 || data[2] != 0xA5) {
+            LOG1("[CMD 0x42] bad magic\r\n");
+            break;
+        }
+        struct pbuf *pb = resp_alloc(0x42, 3);
+        if (pb) {
+            ((uint8_t *)pb->payload)[2] = 0x01;  /* will reset */
+            resp_send(upcb, pb, addr, port);
+        }
+        LOG1("[CMD 0x42] direct SLCR soft reset\r\n");
+        wdt_force_reset_now();
+        /* unreachable */
+        break;
+    }
+
     default:
         LOG1("[CMD] Unknown 0x90 sub=0x%02X\r\n", sub);
         break;
@@ -659,132 +733,38 @@ void cmd_udp_callback(void *arg, struct udp_pcb *upcb,
 
 
 
+/* Protocol 0xA0 — set creg via UDP.
+ *
+ * Packet layout (8 bytes):
+ *   [0] 0xA0  [1] group  [2] creg idx  [3] type=0  [4..7] word (BE)
+ *
+ * Only type=0 ("set") is implemented. RAM mirror, AXI write to PL,
+ * and any AD9361 side-effects are handled by creg_apply(). */
 static void handle_creg_exch(struct udp_pcb *upcb, uint8_t *data,
-                          uint16_t len, const ip_addr_t *addr, u16_t port)
+                             uint16_t len, const ip_addr_t *addr, u16_t port)
 {
+    uint8_t  group = data[1];
+    uint8_t  idx   = data[2];
+    uint8_t  type  = data[3];
 
-    uint8_t group = data[1];
-    uint8_t creg  = data[2];
-    uint8_t type  = data[3];
-    LOG1("[CMD] 0xA0 group=0x%02X creg=0x%02X type=0x%02X len=%d\r\n", group, creg, type, len);
+    LOG1("[CMD] 0xA0 group=%u creg=%u type=0x%02X len=%d\r\n",
+         group, idx, type, len);
 
-
-
-
-    if (group == 1) //tx_chan0
-    {
-
-
-     switch (type) {
-
-      case 0x00: {  /* Set cregs */
-
-        u32 offset = creg;
-        u32 word  =  (u32)data[7]        | ((u32)data[6] << 8) |
-                     ((u32)data[5] << 16)| ((u32)data[4] << 24);
-
-        if (offset == 0)
-        	{
-        	 tx_chan0.creg0.word = word;
-        	 tx_chan0.creg0.inside.run = 0;
-        	 AXI_CNTRL_REG_WRITE(AXI_CNTRL_REG_BASEADDR + TX_CHAN0_PAR_OFFSET, offset*4,  (u32) tx_chan0.creg0.word);
-        	}
-
-
-        if (offset == 1)
-        	{
-        	 tx_chan0.creg1.word = word;
-        	 AXI_CNTRL_REG_WRITE(AXI_CNTRL_REG_BASEADDR + TX_CHAN0_PAR_OFFSET, offset*4,  (u32) tx_chan0.creg1.word);
-        	}
-
-
-
-        if (offset == 2)
-          	{
-          	 tx_chan0.creg2.word = word;
-          	 AXI_CNTRL_REG_WRITE(AXI_CNTRL_REG_BASEADDR + TX_CHAN0_PAR_OFFSET, offset*4,  (u32) tx_chan0.creg2.word);
-
-
-          	 uint64_t freq =  tx_chan0.creg2.word;
-          	 freq = freq*1000;
-          	 ad9361_set_tx_lo_freq (ad9361_phy, freq);
-
-          	}
-
-        if (offset == 3)
-          	{
-          	 tx_chan0.creg3.inside.ad9361_tx_atten = 0x000003ff&word;
-          	 AXI_CNTRL_REG_WRITE(AXI_CNTRL_REG_BASEADDR + TX_CHAN0_PAR_OFFSET, offset*4,  (u32) tx_chan0.creg3.word);
-
-             uint32_t atten =  tx_chan0.creg3.inside.ad9361_tx_atten;
-             atten*=250;
-
-          	 ad9361_set_tx_attenuation (ad9361_phy, 1, atten);
-          	}
-
-
-
-            break;
-        }
+    if (type != 0x00) {
+        LOG1("[CMD] 0xA0 unsupported type=0x%02X\r\n", type);
+        return;
     }
+    if (group != CREG_GROUP_TX_CHAN0 && group != CREG_GROUP_RX_CHAN0) {
+        LOG1("[CMD] 0xA0 unknown group=%u\r\n", group);
+        return;
     }
 
+    uint32_t word = ((uint32_t)data[4] << 24)
+                  | ((uint32_t)data[5] << 16)
+                  | ((uint32_t)data[6] <<  8)
+                  | ((uint32_t)data[7]);
 
-
-    if (group == 2) //rx_chan0
-    {
-
-
-     switch (type) {
-
-      case 0x00: {  /* Set cregs */
-
-        u32 offset = creg;
-        u32 word  =  (u32)data[7]        | ((u32)data[6] << 8) |
-                     ((u32)data[5] << 16)| ((u32)data[4] << 24);
-
-        if (offset == 0)
-        	{
-        	 rx_chan0.creg0.word = word;
-        	 rx_chan0.creg0.inside.run = 0;
-        	 AXI_CNTRL_REG_WRITE(AXI_CNTRL_REG_BASEADDR + RX_CHAN0_PAR_OFFSET, offset, rx_chan0.creg0.word);
-        	}
-
-
-        if (offset == 1)
-          	{
-          	 rx_chan0.creg1.word = word;
-          	 AXI_CNTRL_REG_WRITE(AXI_CNTRL_REG_BASEADDR + RX_CHAN0_PAR_OFFSET, offset*4,  (u32) rx_chan0.creg1.word);
-
-
-          	 uint64_t freq =  rx_chan0.creg1.word;
-          	 freq = freq*1000;
-          	 ad9361_set_rx_lo_freq (ad9361_phy, freq);
-
-          	}
-
-
-
-
-
-
-            break;
-        }
-    }
-    }
-
-
-
-
-
-
-
-
-
-
-
-
-
+    creg_apply((creg_group_t)group, idx, word);
 }
 
 

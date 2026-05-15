@@ -12,10 +12,30 @@
 #ifndef MODEM_H_
 #define MODEM_H_
 
-//CREG OFFSET
-#define BASE_PAR_OFFSET 0
-#define TX_CHAN0_PAR_OFFSET 4*8
-#define RX_CHAN0_PAR_OFFSET 4*(8+4)
+/* ===================================================================
+ *  CREG memory map (contract with PL)
+ *
+ *  AXI address of creg N in a block:
+ *      AXI_CNTRL_REG_BASEADDR + block_offset + N*4
+ *
+ *  Three blocks share AXI_CNTRL_REG_BASEADDR. The 0x20/0x30 layout
+ *  reserves 8 cregs per block in PL even though we use fewer.
+ * =================================================================== */
+#define BASE_PAR_OFFSET       0x00   /* ppos.cregN     — global       */
+#define TX_CHAN0_PAR_OFFSET   0x20   /* tx_chan0.cregN — TX channel   */
+#define RX_CHAN0_PAR_OFFSET   0x30   /* rx_chan0.cregN — RX channel   */
+
+#define BASE_PAR_NUM_CREGS    6
+#define TX_CHAN0_NUM_CREGS    4
+#define RX_CHAN0_NUM_CREGS    2
+
+/* Group IDs as used by the 0xA0 protocol. */
+typedef enum {
+    CREG_GROUP_BASE     = 0,  /* not exposed via 0xA0 currently */
+    CREG_GROUP_TX_CHAN0 = 1,
+    CREG_GROUP_RX_CHAN0 = 2,
+    CREG_GROUP_COUNT
+} creg_group_t;
 
 #ifndef IS_QT
 
@@ -471,18 +491,21 @@ void spi_engine_npu_pow_board_init(struct no_os_spi_desc**  spi_eng);
 
 void spi_engine_npu_com_board_get_status(struct no_os_spi_desc*  spi_eng, struct stat_npu* status_npu);
 void spi_engine_npu_com_board_set_ena(struct no_os_spi_desc*  spi_eng, com_dev_type com_dev,  ena_type ena);
-//void spi_engine_npu_pow_board_get_status(struct no_os_spi_desc*  spi_eng, struct stat_npu* status_npu);
-//void spi_engine_npu_pow_board_set_ena(struct no_os_spi_desc*  spi_eng, pow_cntrl_type cntrl_type,  ena_type ena );
-//void spi_engine_npu_pow_board_set_f_diap(struct no_os_spi_desc*  spi_eng,  pow_cntrl_type typ );
 void spi_engine_npu_pow_board_set_f_diap(struct no_os_spi_desc*  spi_eng_com, struct no_os_spi_desc*  spi_eng,  pow_cntrl_type typ );
 
-void spi_engine_npu_com_board_set_sd_on(struct no_os_spi_desc*  spi_eng);
-void spi_engine_npu_com_board_set_sd_off(struct no_os_spi_desc*  spi_eng);
-void spi_engine_npu_com_board_set_sd_status(struct no_os_spi_desc*  spi_eng);
-
-//void ppos_set_tangenta(ena_type ena);
 void ppos_set_tangenta(struct no_os_spi_desc*  spi_eng, ena_type ena);
 
+
+/* ===================================================================
+ *  CREG access API
+ *
+ *  creg_sync   — push current RAM mirror of (group, idx) into PL.
+ *  creg_apply  — set (group, idx) to `word`: patches RAM mirror,
+ *                applies pre-write fixups (run=0 on creg0, atten mask),
+ *                writes to PL, dispatches AD9361 side-effects.
+ * =================================================================== */
+void creg_sync(creg_group_t group, uint8_t idx);
+void creg_apply(creg_group_t group, uint8_t idx, uint32_t word);
 
 
 void modem_init();
