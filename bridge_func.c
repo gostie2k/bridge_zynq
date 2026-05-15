@@ -179,12 +179,12 @@ err_t vport3_linkoutput(struct netif *netif, struct pbuf *p) {
 	if (DEB_FUNC)
 	{
 	       //struct eth_hdr *ethhdr = (struct eth_hdr*)p->payload;
-	        xil_printf("vport3_linkoutput: dest:%02X:%02X:%02X:%02X:%02X:%02X, src:%02X:%02X:%02X:%02X:%02X:%02X, type:%04X  len: %4d \n\r",
+	        xil_printf("vport3_linkoutput: dest:%02X:%02X:%02X:%02X:%02X:%02X, src:%02X:%02X:%02X:%02X:%02X:%02X, type:%04X  tot_len: %4d len: %4d \n\r",
 	       (unsigned char)ethhdr->dest.addr[0], (unsigned char)ethhdr->dest.addr[1], (unsigned char)ethhdr->dest.addr[2],
 	       (unsigned char)ethhdr->dest.addr[3], (unsigned char)ethhdr->dest.addr[4], (unsigned char)ethhdr->dest.addr[5],
 	       (unsigned char)ethhdr->src.addr[0],  (unsigned char)ethhdr->src.addr[1],  (unsigned char)ethhdr->src.addr[2],
 	       (unsigned char)ethhdr->src.addr[3],  (unsigned char)ethhdr->src.addr[4],  (unsigned char)ethhdr->src.addr[5],
-		   lwip_htons(ethhdr->type), p->tot_len  );
+		   lwip_htons(ethhdr->type), p->tot_len, p->len);
 
 /*
            int row = 0;

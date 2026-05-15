@@ -260,6 +260,8 @@ bridgeif_is_local_mac(bridgeif_private_t *br, struct eth_addr *addr)
 static err_t
 bridgeif_send_to_port(bridgeif_private_t *br, struct pbuf *p, u8_t dstport_idx)
 {
+
+
   if (dstport_idx < BRIDGEIF_MAX_PORTS) {
     /* possibly an external port */
     if (dstport_idx < br->max_ports) {
@@ -269,6 +271,8 @@ bridgeif_send_to_port(bridgeif_private_t *br, struct pbuf *p, u8_t dstport_idx)
         if (netif_get_index(portif) != p->if_idx) {
           if (netif_is_link_up(portif)) {
             LWIP_DEBUGF(BRIDGEIF_FW_DEBUG, ("br -> flood(%p:%d) -> %d\n\r", (void *)p, p->if_idx, netif_get_index(portif)));
+
+
             return portif->linkoutput(portif, p);
           }
         }
@@ -286,6 +290,11 @@ static err_t
 bridgeif_send_to_ports(bridgeif_private_t *br, struct pbuf *p, bridgeif_portmask_t dstports)
 {
 	LWIP_DEBUGF(BRIDGEIF_FW_DEBUG, ("DBG: bridge will send to port mask 0x%08" X32_F"\n\r", (unsigned)dstports));
+
+
+
+
+
 
   err_t err, ret_err = ERR_OK;
   u8_t i;
@@ -351,6 +360,9 @@ bridgeif_input(struct pbuf *p, struct netif *netif)
   struct eth_addr *src, *dst;
   bridgeif_private_t *br;
   bridgeif_port_t *port;
+
+
+
   if (p == NULL || netif == NULL) {
     return ERR_VAL;
   }
@@ -410,6 +422,11 @@ bridgeif_input(struct pbuf *p, struct netif *netif)
     /* get dst port */
     dstports = bridgeif_find_dst_ports(br, dst);
     bridgeif_send_to_ports(br, p, dstports);
+
+
+
+
+
     /* no need to send to cpu, flooding is for external ports only */
     /* by  this, we consumed the pbuf */
     pbuf_free(p);
@@ -533,6 +550,8 @@ bridgeif_init(struct netif *netif)
 
   /* maximum transfer unit */
   netif->mtu = 1500;
+
+  //netif->mtu = 1514;
 
   /* device capabilities */
   /* don't set NETIF_FLAG_ETHARP if this device is not an ethernet one */

@@ -23,7 +23,7 @@
 #include <string.h>
 #include <stdlib.h>
 
-#define CMD_BUF_DEPTH 128
+#define CMD_BUF_DEPTH 256
 
 #pragma pack(push,1)
 struct cmd_pkt

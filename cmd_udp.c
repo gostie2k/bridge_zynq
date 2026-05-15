@@ -28,9 +28,16 @@ extern XLlFifo                  fifo;
 extern struct ad9361_rf_phy    *ad9361_phy;
 extern struct no_os_spi_desc    desc_tmp;
 
-extern struct ppos_tx tx_chan0;
-extern struct ppos_rx rx_chan0;
+extern struct ppos_tx  tx_chan0;
+extern struct ppos_rx  rx_chan0;   /* в main.c определена как ppos_rx */
+extern struct ppos_par ppos;
 
+/* Runtime-управляемый уровень логирования. Меняется через 0x90 0x46.
+ * volatile т.к. читается из main loop / hot path и может быть изменён
+ * из cmd_udp_callback (другой контекст исполнения). */
+volatile int g_log_level = LOG_DEBUG_DEFAULT;
+
+/* Forward declaration — определение ниже по файлу. */
 static void handle_creg_exch(struct udp_pcb *upcb, uint8_t *data,
                              uint16_t len, const ip_addr_t *addr, u16_t port);
 
@@ -289,22 +296,6 @@ static void handle_proto_0x90(struct udp_pcb *upcb, uint8_t *data,
         break;
     }
 
-    case 0x18: {  /* NPU tangenta (via exec_func type=20) */
-            if (len != 3) { LOG1("[CMD] 0x18 bad len %d\r\n", len); break; }
-
-            /* data[2] содержит переданный payload (0=ПРМ, 1=ПРД) */
-            extern u8 func_type;
-            extern u8 func_par[16];
-            extern bool func_start;
-
-            func_type = 20;         /* Идентификатор для тангенты НПУ */
-            func_par[0] = data[2];  /* Сохраняем режим */
-            func_start = true;      /* Даем сигнал на выполнение в главном цикле/прерывании */
-
-            LOG2("[CMD] NPU tangenta mode=%d\r\n", data[2]);
-            break;
-        }
-
     /* ==================== READ commands ==================== */
 
     case 0x10: {  /* Read TX frequency */
@@ -557,42 +548,33 @@ static void handle_proto_0x90(struct udp_pcb *upcb, uint8_t *data,
         break;
     }
 
-    case 0x41: {  /* Simulate hang (для тестирования WDT).
-                   * Payload: [2] = magic 0x5A — защита от случайного вызова.
-                   * Ответ отправляется ДО hang'а.
-                   */
+    case 0x41: {  /* Simulate hang (для тестирования WDT) */
         if (len < 3 || data[2] != 0x5A) {
             LOG1("[CMD 0x41] bad magic\r\n");
             break;
         }
         struct pbuf *pb = resp_alloc(0x41, 3);
         if (pb) {
-            ((uint8_t *)pb->payload)[2] = 0x01;  /* will hang */
+            ((uint8_t *)pb->payload)[2] = 0x01;
             resp_send(upcb, pb, addr, port);
         }
         LOG1("[CMD 0x41] simulating hang — system will reset\r\n");
         wdt_simulate_hang();
-        /* unreachable */
         break;
     }
 
-    case 0x42: {  /* Direct SLCR soft reset (bypass WDT/ISR).
-                   * Payload: [2] = magic 0xA5 — защита от случайного вызова.
-                   * Используется для диагностики: если PS ребутается от 0x42
-                   * но не от 0x41 — проблема в WDT-ISR пути, а не в SLCR.
-                   */
+    case 0x42: {  /* Direct SLCR soft reset (bypass WDT/ISR) */
         if (len < 3 || data[2] != 0xA5) {
             LOG1("[CMD 0x42] bad magic\r\n");
             break;
         }
         struct pbuf *pb = resp_alloc(0x42, 3);
         if (pb) {
-            ((uint8_t *)pb->payload)[2] = 0x01;  /* will reset */
+            ((uint8_t *)pb->payload)[2] = 0x01;
             resp_send(upcb, pb, addr, port);
         }
         LOG1("[CMD 0x42] direct SLCR soft reset\r\n");
         wdt_force_reset_now();
-        /* unreachable */
         break;
     }
 
@@ -600,11 +582,7 @@ static void handle_proto_0x90(struct udp_pcb *upcb, uint8_t *data,
      * 0x43 — recover lwIP (cleanup dynamic FDB)
      * 0x44 — recover radio TX (FIFO TX reset + ring/counters)
      * 0x45 — recover radio RX (FIFO RX reset + parser state)
-     * Все требуют magic byte 0x52 (= 'R') в payload[2] чтобы не дёрнуть
-     * случайно. Ответ: [0x90][sub][status] где status:
-     *   0x00 — bad magic
-     *   0x01 — выполнено
-     */
+     * Все требуют magic byte 0x52 (= 'R') в payload[2]. */
     case 0x43: {  /* Recover lwIP */
         if (len < 3 || data[2] != 0x52) {
             LOG1("[CMD 0x43] bad magic\r\n");
@@ -650,6 +628,27 @@ static void handle_proto_0x90(struct udp_pcb *upcb, uint8_t *data,
         struct pbuf *pb = resp_alloc(0x45, 3);
         if (pb) { ((uint8_t *)pb->payload)[2] = 0x01; resp_send(upcb, pb, addr, port); }
         LOG1("[CMD 0x45] radio RX recovery done\r\n");
+        break;
+    }
+
+    /* Get/Set runtime log level (0..3).
+     *   Request len=2: GET — ответ [0x90][0x46][level]
+     *   Request len=3: SET — payload[2] = новый уровень, ответ тот же. */
+    case 0x46: {
+        if (len >= 3) {
+            int new_level = (int)data[2];
+            if (new_level < 0) new_level = 0;
+            if (new_level > 3) new_level = 3;
+            g_log_level = new_level;
+            /* Печатаем безусловно (через xil_printf), чтобы видеть смену
+             * уровня даже когда выключаем логи в 0. */
+            xil_printf("[LOG] level set to %d\r\n", new_level);
+        }
+        struct pbuf *pb = resp_alloc(0x46, 3);
+        if (pb) {
+            ((uint8_t *)pb->payload)[2] = (uint8_t)g_log_level;
+            resp_send(upcb, pb, addr, port);
+        }
         break;
     }
 
@@ -791,38 +790,246 @@ void cmd_udp_callback(void *arg, struct udp_pcb *upcb,
 
 
 
-/* Protocol 0xA0 — set creg via UDP.
- *
- * Packet layout (8 bytes):
- *   [0] 0xA0  [1] group  [2] creg idx  [3] type=0  [4..7] word (BE)
- *
- * Only type=0 ("set") is implemented. RAM mirror, AXI write to PL,
- * and any AD9361 side-effects are handled by creg_apply(). */
 static void handle_creg_exch(struct udp_pcb *upcb, uint8_t *data,
-                             uint16_t len, const ip_addr_t *addr, u16_t port)
+                          uint16_t len, const ip_addr_t *addr, u16_t port)
 {
-    uint8_t  group = data[1];
-    uint8_t  idx   = data[2];
-    uint8_t  type  = data[3];
 
-    LOG1("[CMD] 0xA0 group=%u creg=%u type=0x%02X len=%d\r\n",
-         group, idx, type, len);
+    uint8_t group = data[1];
+    uint8_t creg  = data[2];
+    uint8_t type  = data[3];
+    LOG1("[CMD] 0xA0 group=0x%02X creg=0x%02X type=0x%02X len=%d\r\n", group, creg, type, len);
 
-    if (type != 0x00) {
-        LOG1("[CMD] 0xA0 unsupported type=0x%02X\r\n", type);
-        return;
+
+    if (group == 0) //ppos
+    {
+
+    	 switch (type) {
+
+    	      case 0x00: {  /* Set cregs */
+
+    	        u32 offset = creg;
+    	        u32 word  =  (u32)data[7]        | ((u32)data[6] << 8) |
+    	                     ((u32)data[5] << 16)| ((u32)data[4] << 24);
+
+    	        ppos.creg2.word = word;
+
+    	        if (offset == 2)
+    	        	{
+    	        	 ppos.creg2.word = word;
+    	        	 AXI_CNTRL_REG_WRITE(AXI_CNTRL_REG_BASEADDR, offset*4,  (u32) ppos.creg2.word);
+    	        	}
+
+    	        if (offset == 3)
+    	         	{
+    	         	 ppos.creg3.word = word;
+    	         	 AXI_CNTRL_REG_WRITE(AXI_CNTRL_REG_BASEADDR, offset*4,  (u32) ppos.creg3.word);
+    	         	}
+
+    	        if (offset == 5)
+    	      	    {
+    	      	     ppos.creg5.word = word;
+    	      	     AXI_CNTRL_REG_WRITE(AXI_CNTRL_REG_BASEADDR, offset*4,  (u32) ppos.creg5.word);
+    	      	    }
+
+
+    	          break;
+    	        }
+    	    }
+    	    }
+
+
+
+
+
+
+    if (group == 1) //tx_chan0
+    {
+
+
+     switch (type) {
+
+      case 0x00: {  /* Set cregs */
+
+        u32 offset = creg;
+        u32 word  =  (u32)data[7]        | ((u32)data[6] << 8) |
+                     ((u32)data[5] << 16)| ((u32)data[4] << 24);
+
+        if (offset == 0)
+        	{
+        	 tx_chan0.creg0.word = word;
+        	 tx_chan0.creg0.inside.run = 0;
+        	 AXI_CNTRL_REG_WRITE(AXI_CNTRL_REG_BASEADDR + TX_CHAN0_PAR_OFFSET, offset*4,  (u32) tx_chan0.creg0.word);
+        	}
+
+
+        if (offset == 1)
+        	{
+        	 tx_chan0.creg1.word = word;
+        	 AXI_CNTRL_REG_WRITE(AXI_CNTRL_REG_BASEADDR + TX_CHAN0_PAR_OFFSET, offset*4,  (u32) tx_chan0.creg1.word);
+        	}
+
+
+
+        if (offset == 2)
+          	{
+          	 tx_chan0.creg2.word = word;
+          	 AXI_CNTRL_REG_WRITE(AXI_CNTRL_REG_BASEADDR + TX_CHAN0_PAR_OFFSET, offset*4,  (u32) tx_chan0.creg2.word);
+
+
+          	 uint64_t freq =  tx_chan0.creg2.word;
+          	 freq = freq*1000;
+          	 ad9361_set_tx_lo_freq (ad9361_phy, freq);
+
+          	}
+
+        if (offset == 3)
+          	{
+          	 tx_chan0.creg3.inside.ad9361_tx_atten = 0x000003ff&word;
+          	 AXI_CNTRL_REG_WRITE(AXI_CNTRL_REG_BASEADDR + TX_CHAN0_PAR_OFFSET, offset*4,  (u32) tx_chan0.creg3.word);
+
+             uint32_t atten =  tx_chan0.creg3.inside.ad9361_tx_atten;
+             atten*=250;
+
+          	 ad9361_set_tx_attenuation (ad9361_phy, 1, atten);
+          	}
+
+
+
+            break;
+        }
     }
-    if (group != CREG_GROUP_TX_CHAN0 && group != CREG_GROUP_RX_CHAN0) {
-        LOG1("[CMD] 0xA0 unknown group=%u\r\n", group);
-        return;
     }
 
-    uint32_t word = ((uint32_t)data[4] << 24)
-                  | ((uint32_t)data[5] << 16)
-                  | ((uint32_t)data[6] <<  8)
-                  | ((uint32_t)data[7]);
 
-    creg_apply((creg_group_t)group, idx, word);
+
+    if (group == 2) //rx_chan0
+    {
+
+
+     switch (type) {
+
+      case 0x00: {  /* Set cregs */
+
+        u32 offset = creg;
+        u32 word  =  (u32)data[7]        | ((u32)data[6] << 8) |
+                     ((u32)data[5] << 16)| ((u32)data[4] << 24);
+
+        if (offset == 0)
+        	{
+        	 rx_chan0.creg0.word = word;
+        	 rx_chan0.creg0.inside.run = 0;
+        	 AXI_CNTRL_REG_WRITE(AXI_CNTRL_REG_BASEADDR + RX_CHAN0_PAR_OFFSET, offset, rx_chan0.creg0.word);
+        	}
+
+
+        if (offset == 1)
+          	{
+          	 rx_chan0.creg1.word = word;
+          	 AXI_CNTRL_REG_WRITE(AXI_CNTRL_REG_BASEADDR + RX_CHAN0_PAR_OFFSET, offset*4,  (u32) rx_chan0.creg1.word);
+
+
+          	 uint64_t freq =  rx_chan0.creg1.word;
+          	 freq = freq*1000;
+          	 ad9361_set_rx_lo_freq (ad9361_phy, freq);
+
+          	}
+
+
+
+
+
+
+            break;
+        }
+    }
+    }
+
+
+
+    if (group == 3) //
+    {
+
+     switch (type) {
+
+      case 0x00: {  /* Set cregs */
+
+        u32 offset = creg;
+        u32 word  =  (u32)data[7]        | ((u32)data[6] << 8) |
+                     ((u32)data[5] << 16)| ((u32)data[4] << 24);
+
+        if (offset == 0)
+        	{
+        	   word = swap32(word);
+        	   //memcpy((uint32_t*) &ppos.status_ip, &word, 4);
+        	   memcpy((uint8_t*) &ppos.status_ip, (uint8_t*) &word, 4);
+
+        	}
+
+        if (offset == 1)
+            {
+        	   ppos.status_on = (word>>16)&0x000001;
+        	   ppos.status_port = word&0x0000ffff;
+            }
+
+
+
+
+            break;
+        }
+    }
+    }
+
+
+
+
+
+
+
+
+
+
 }
+
+
+
+void send_modem_status(struct udp_pcb *upcb, struct stat_modem* status)
+{
+    if (ppos.status_on)
+    {
+
+ 	udp_bind_netif (upcb, &bridge_netif);
+
+     struct pbuf *p = pbuf_alloc(PBUF_TRANSPORT, sizeof(struct stat_modem), PBUF_RAM);
+     if (!p) {
+         xil_printf("Failed to allocate pbuf for deb packet\n\r");
+         return;
+     }
+
+     memcpy((uint8_t*) p->payload, (uint8_t*) status, sizeof(struct stat_modem));
+
+     err_t out = udp_sendto(upcb, p, &ppos.status_ip, ppos.status_port);
+
+     if (out != ERR_OK) {
+         xil_printf("Error udp_sendto debug_pcb: %d\n\r", out);
+     }
+
+     pbuf_free(p);
+    }
+    return;
+ }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 

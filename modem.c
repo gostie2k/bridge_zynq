@@ -123,202 +123,174 @@ void spi_engine_ad9361_init(struct no_os_spi_desc**  spi_eng)
 
 
 
-
-/* ========================================================================
- *   MAX7301 вЂ” РёРЅРёС†РёР°Р»РёР·Р°С†РёСЏ СЃ РІРµСЂРёС„РёРєР°С†РёРµР№ РєР°Р¶РґРѕР№ Р·Р°РїРёСЃРё
- * ======================================================================== */
-
-/* Р•СЃР»Рё С…РѕС‡РµС€СЊ СѓР±СЂР°С‚СЊ РІСЃСЋ РѕС‚Р»Р°РґРєСѓ - РїРѕСЃС‚Р°РІСЊ 0 */
-#define MAX7301_VERIFY_INIT  0
-
-/**
- * Р§С‚РµРЅРёРµ СЂРµРіРёСЃС‚СЂР° MAX7301 (РґРІРµ SPI-С‚СЂР°РЅР·Р°РєС†РёРё).
- */
-static uint8_t max7301_read_reg(struct no_os_spi_desc *spi, uint8_t addr)
+void spi_engine_npu_com_board_init(struct no_os_spi_desc**  spi_eng)
 {
-    uint8_t buf[2];
-
-    buf[0] = 0x80 | (addr & 0x7F);
-    buf[1] = 0x00;
-    spi_engine_write_and_read(spi, buf, 2);
-
-    buf[0] = 0x00;
-    buf[1] = 0x00;
-    spi_engine_write_and_read(spi, buf, 2);
-
-    return buf[1];
-}
-
-/**
- * РџСЂРѕСЃС‚Р°СЏ Р·Р°РїРёСЃСЊ СЂРµРіРёСЃС‚СЂР° (Р±РµР· РІРµСЂРёС„РёРєР°С†РёРё).
- */
-static void max7301_write_reg(struct no_os_spi_desc *spi,
-                              uint8_t addr, uint8_t data)
-{
-    uint8_t buf[2] = { (uint8_t)(addr & 0x7F), data };
-    spi_engine_write_and_read(spi, buf, 2);
-}
-
-/**
- * Р—Р°РїРёСЃСЊ СЃ РІРµСЂРёС„РёРєР°С†РёРµР№.
- *   verify_strict = 1: СЃСЂР°РІРЅРёРІР°РµРј readback СЃ Р·Р°РїРёСЃР°РЅРЅС‹Рј, РїСЂРё РЅРµСЃРѕРІРїР°РґРµРЅРёРё - FAIL.
- *                       РСЃРїРѕР»СЊР·СѓРµС‚СЃСЏ РґР»СЏ config-СЂРµРіРёСЃС‚СЂРѕРІ (0x04, 0x09..0x0F)
- *                       Рё РґР»СЏ Р·Р°РїРёСЃРµР№ РІ РїРѕСЂС‚С‹, Сѓ РєРѕС‚РѕСЂС‹С… Р’РЎР• Р±РёС‚С‹ СЏРІР»СЏСЋС‚СЃСЏ РІС‹С…РѕРґР°РјРё.
- *   verify_strict = 0: Р·Р°РїРёСЃСЊ Рё С‡С‚РµРЅРёРµ, РїРµС‡Р°С‚СЊ readback Р‘Р•Р— РїСЂРѕРІРµСЂРєРё.
- *                       РСЃРїРѕР»СЊР·СѓРµС‚СЃСЏ РґР»СЏ РіСЂСѓРїРїС‹ 0x40..0x5F, РіРґРµ С‡Р°СЃС‚СЊ Р±РёС‚ -
- *                       РІС‹С…РѕРґС‹, С‡Р°СЃС‚СЊ - С„РёР·СѓСЂРѕРІРµРЅСЊ РІС…РѕРґРѕРІ; СЃСЂР°РІРЅРёРІР°С‚СЊ РїРѕР±Р°Р№С‚РЅРѕ РЅРµР»СЊР·СЏ.
- *
- * Р’РѕР·РІСЂР°С‰Р°РµС‚ 0 РЅР° СѓСЃРїРµС…, -1 РЅР° FAIL.
- */
-static int max7301_wr_v(struct no_os_spi_desc *spi,
-                        uint8_t addr, uint8_t data,
-                        uint8_t verify_strict,
-                        const char *what)
-{
-    max7301_write_reg(spi, addr, data);
-
-#if MAX7301_VERIFY_INIT
-    uint8_t rb = max7301_read_reg(spi, addr);
-
-    if (verify_strict) {
-        if (rb == data) {
-            xil_printf("  [OK]   0x%02X <- 0x%02X            : %s\r\n",
-                       addr, data, what);
-            return 0;
-        } else {
-            xil_printf("  [FAIL] 0x%02X <- 0x%02X, read 0x%02X : %s\r\n",
-                       addr, data, rb, what);
-            return -1;
-        }
-    } else {
-        xil_printf("  [WR]   0x%02X <- 0x%02X, read 0x%02X : %s\r\n",
-                   addr, data, rb, what);
-        return 0;
-    }
-#else
-    (void)addr; (void)data; (void)verify_strict; (void)what;
-    return 0;
-#endif
-}
-
-/* ========================================================================
- *   COM-board (CS2) вЂ” СЏС‡РµР№РєР° РєРѕРјРјСѓС‚Р°С†РёРѕРЅРЅР°СЏ
- *   Р’РѕР·РІСЂР°С‰Р°РµС‚ С‡РёСЃР»Рѕ РѕС€РёР±РѕРє РІРµСЂРёС„РёРєР°С†РёРё (0 - РІСЃС‘ С…РѕСЂРѕС€Рѕ).
- * ======================================================================== */
-void spi_engine_npu_com_board_init(struct no_os_spi_desc **spi_eng)
-{
-    int errs = 0;
-
-    /* --- SPI Engine --- */
     struct spi_engine_init_param spi_engine_init_par;
-    spi_engine_init_par.spi_engine_baseaddr = SPI_ENGINE_NPU_BASEADDR;
-    spi_engine_init_par.type                = SPI_ENGINE;
-    spi_engine_init_par.data_width          = 8;
-    spi_engine_init_par.cs_delay            = 0;
-    spi_engine_init_par.ref_clk_hz          = 100000000;
-    spi_engine_init_par.sdo_idle_state      = 1;
+    spi_engine_init_par.spi_engine_baseaddr =  SPI_ENGINE_NPU_BASEADDR;
+    spi_engine_init_par.type = SPI_ENGINE;
+    spi_engine_init_par.data_width = 8;
+    spi_engine_init_par.cs_delay = 100;
+    spi_engine_init_par.ref_clk_hz = 100000000;
+    spi_engine_init_par.sdo_idle_state = 1;
 
-    struct no_os_spi_init_param no_os_spi_init = {0};
-    no_os_spi_init.extra        = &spi_engine_init_par;
-    no_os_spi_init.mode         = NO_OS_SPI_MODE_0;
-    no_os_spi_init.device_id    = 1;
-    no_os_spi_init.chip_select  = NPU_COM_BOARD_CS;
-    no_os_spi_init.max_speed_hz = 25000000;
 
-    spi_engine_init(spi_eng, &no_os_spi_init);
-    xil_printf(">>> COM init: device_id=%d, chip_select=%d\r\n",
-                       (*spi_eng)->device_id, (*spi_eng)->chip_select);
-    spi_engine_set_speed(*spi_eng, 1000000);
-
-    xil_printf("\r\n=== MAX7301 init: COM-board (CS2) ===\r\n");
-
-    /* --- РљРѕРЅС„РёРі СЂРµР¶РёРјРѕРІ РїРѕСЂС‚РѕРІ: РІРµСЂРёС„РёРєР°С†РёСЏ СЃС‚СЂРѕРіР°СЏ --- */
-    errs += (max7301_wr_v(*spi_eng, 0x09, 0xFF, 1, "P[7:4]   In+PU") != 0);
-    errs += (max7301_wr_v(*spi_eng, 0x0A, 0xFF, 1, "P[11:8]  In+PU") != 0);
-    errs += (max7301_wr_v(*spi_eng, 0x0B, 0xFD, 1, "P[15:13] In+PU, P12 Out") != 0);
-    errs += (max7301_wr_v(*spi_eng, 0x0C, 0xFF, 1, "P[19:16] In+PU") != 0);
-    errs += (max7301_wr_v(*spi_eng, 0x0D, 0x57, 1, "P[23:21] Out, P20 In+PU") != 0);
-    //errs += (max7301_wr_v(*spi_eng, 0x0E, 0xF5, 1, "P[27:26] In+PU, P[25:24] Out") != 0);
-    errs += (max7301_wr_v(*spi_eng, 0x0E, 0xD5, 1, "P[27:26] In+PU, P[25:24] Out") != 0);
-    //errs += (max7301_wr_v(*spi_eng, 0x0F, 0xFF, 1, "P[31:28] In+PU") != 0);
-    errs += (max7301_wr_v(*spi_eng, 0x0F, 0x5D, 1, "P[31:28] In+PU") != 0);
-
-    /* --- РќР°С‡Р°Р»СЊРЅС‹Рµ Р·РЅР°С‡РµРЅРёСЏ РІС‹С…РѕРґРѕРІ ---
-     * 0x2C - РѕРґРёРЅРѕС‡РЅС‹Р№ СЂРµРіРёСЃС‚СЂ P12, РІСЃС‘ С‡С‚Рѕ РїРёСЃР°Р»Рё - С‡РёС‚Р°РµС‚СЃСЏ РѕР±СЂР°С‚РЅРѕ (strict).
-     * 0x55 - РіСЂСѓРїРїРѕРІР°СЏ Р·Р°РїРёСЃСЊ P[28:21]; РІРЅСѓС‚СЂРё РµСЃС‚СЊ Рё РІС‹С…РѕРґС‹ (P21..P25)
-     *        Рё РІС…РѕРґС‹ (P26..P28) - РќР• strict.
-     */
-    errs += (max7301_wr_v(*spi_eng, 0x2C, 0x00, 1, "P12        init=0") != 0);
-    max7301_wr_v(*spi_eng, 0x55, 0x00, 0, "P[28:21]   init=0 (group)");
-
-    /* --- РЎРЅРёРјР°РµРј shutdown РІ СЃР°РјРѕРј РєРѕРЅС†Рµ --- */
-    errs += (max7301_wr_v(*spi_eng, 0x04, 0x01, 1, "Shutdown OFF (Normal)") != 0);
-
-#if MAX7301_VERIFY_INIT
-    if (errs == 0)
-        xil_printf("=== COM-board: OK (no verify errors) ===\r\n\r\n");
-    else
-        xil_printf("=== COM-board: %d VERIFY ERRORS ===\r\n\r\n", errs);
-#endif
-
-    return errs;
-}
-
-/* ========================================================================
- *   POW-board (CS1) вЂ” СЏС‡РµР№РєР° СЂР°СЃРїСЂРµРґРµР»РµРЅРёСЏ РїРёС‚Р°РЅРёСЏ
- * ======================================================================== */
-void spi_engine_npu_pow_board_init(struct no_os_spi_desc** spi_eng)
-{
-    int errs = 0;
-
-    /* --- SPI Engine --- */
-    struct spi_engine_init_param spi_engine_init_par;
-    spi_engine_init_par.spi_engine_baseaddr = SPI_ENGINE_NPU_BASEADDR;
-    spi_engine_init_par.type                = SPI_ENGINE;
-    spi_engine_init_par.data_width          = 8;
-    spi_engine_init_par.cs_delay            = 0;
-    spi_engine_init_par.ref_clk_hz          = 100000000;
-    spi_engine_init_par.sdo_idle_state      = 0;
-
-    struct no_os_spi_init_param no_os_spi_init = {0};
-    no_os_spi_init.extra        = &spi_engine_init_par;
-    no_os_spi_init.mode         = NO_OS_SPI_MODE_0;
-    no_os_spi_init.device_id    = 1;
-    no_os_spi_init.chip_select  = NPU_POW_BOARD_CS;
+    struct no_os_spi_init_param no_os_spi_init={0};
+    no_os_spi_init.extra = &spi_engine_init_par;
+    ////no_os_spi_init.parent = &spi_eng;
+    no_os_spi_init.mode=NO_OS_SPI_MODE_0;
+    no_os_spi_init.device_id = 1;
+    no_os_spi_init.chip_select =  NPU_COM_BOARD_CS;
     no_os_spi_init.max_speed_hz = 25000000;
 
     spi_engine_init(spi_eng, &no_os_spi_init);
     spi_engine_set_speed(*spi_eng, 1000000);
-    xil_printf(">>> POW init: device_id=%d, chip_select=%d\r\n",
-                   (*spi_eng)->device_id, (*spi_eng)->chip_select);
-    xil_printf("\r\n=== MAX7301 init: POW-board (CS1) ===\r\n");
+    //MAX7301AAX+
+    uint8_t tx_buf[2];
 
-    /* --- РљРѕРЅС„РёРі СЂРµР¶РёРјРѕРІ РїРѕСЂС‚РѕРІ --- */
-    errs += (max7301_wr_v(*spi_eng, 0x09, 0xF5, 1, "P[7:6]   In+PU, P[5:4] Out") != 0);
-    errs += (max7301_wr_v(*spi_eng, 0x0A, 0xFF, 1, "P[11:8]  In+PU") != 0);
-    errs += (max7301_wr_v(*spi_eng, 0x0B, 0xFF, 1, "P[15:12] In+PU") != 0);
-    errs += (max7301_wr_v(*spi_eng, 0x0C, 0xFF, 1, "P[19:16] In+PU") != 0);
-    errs += (max7301_wr_v(*spi_eng, 0x0D, 0xFF, 1, "P[23:20] In+PU") != 0);
-    errs += (max7301_wr_v(*spi_eng, 0x0E, 0xFF, 1, "P[27:24] In+PU") != 0);
-    errs += (max7301_wr_v(*spi_eng, 0x0F, 0xFF, 1, "P[31:28] In+PU") != 0);
+    tx_buf[0] = 0x00;
+    tx_buf[1] = 0x00;
+    spi_engine_write_and_read(*spi_eng,(uint8_t *)&tx_buf, 2);
+    usleep(100);
 
-    /* --- РќР°С‡Р°Р»СЊРЅС‹Рµ Р·РЅР°С‡РµРЅРёСЏ РІС‹С…РѕРґРѕРІ ---
-     * 0x40 - РіСЂСѓРїРїРѕРІРѕР№ СЂРµРіРёСЃС‚СЂ P[7:4]; P4,P5 - РІС‹С…РѕРґС‹, P6,P7 - РІС…РѕРґС‹.
-     * Р§РёС‚Р°С‚СЊ РѕР±СЂР°С‚РЅРѕ СЃС‚СЂРѕРіРѕ РїРѕР±Р°Р№С‚РЅРѕ РЅРµР»СЊР·СЏ - non-strict.
-     */
-    max7301_wr_v(*spi_eng, 0x40, 0x03, 0, "P[7:4]     init=0x03 (group)");
+    //00 -not use, 01 - output, 10- Schmitt logic input, 11 - Schmitt logic input with pullup
+    tx_buf[0] = 0x09; // Адрес регистра конфигурации портов P[7:4]
+    tx_buf[1] = 0xff; // Данные: 11 11 11 11
+    spi_engine_write_and_read(*spi_eng,(uint8_t *)&tx_buf, 2);
+    usleep(100);
 
-    /* --- РЎРЅРёРјР°РµРј shutdown РІ СЃР°РјРѕРј РєРѕРЅС†Рµ --- */
-    errs += (max7301_wr_v(*spi_eng, 0x04, 0x01, 1, "Shutdown OFF (Normal)") != 0);
+    tx_buf[0] = 0x0A; // Адрес регистра конфигурации портов P[11:8]
+    tx_buf[1] = 0xff; // Данные: 11 11 11 11
+    spi_engine_write_and_read(*spi_eng,(uint8_t *)&tx_buf, 2);
+    usleep(100);
 
-#if MAX7301_VERIFY_INIT
-    if (errs == 0)
-        xil_printf("=== POW-board: OK (no verify errors) ===\r\n\r\n");
-    else
-        xil_printf("=== POW-board: %d VERIFY ERRORS ===\r\n\r\n", errs);
-#endif
+    tx_buf[0] = 0x0B; // Адрес регистра конфигурации портов P[15:12]
+    tx_buf[1] = 0xfd; // Данные: 11 11 11 01
+    spi_engine_write_and_read(*spi_eng,(uint8_t *)&tx_buf, 2);
+    usleep(100);
 
-    return errs;
+    tx_buf[0] = 0x0C; // Адрес регистра конфигурации портов P[19:16]
+    tx_buf[1] = 0xff; // Данные: 11 11 11 11
+    spi_engine_write_and_read(*spi_eng,(uint8_t *)&tx_buf, 2);
+    usleep(100);
+
+    tx_buf[0] = 0x0D; // Адрес регистра конфигурации портов P[23:20]
+    tx_buf[1] = 0x57; // Данные: 01 01 01 11
+    spi_engine_write_and_read(*spi_eng,(uint8_t *)&tx_buf, 2);
+    usleep(100);
+
+    tx_buf[0] = 0x0E; // Адрес регистра конфигурации портов P[27:24]
+    tx_buf[1] = 0xD5; // Данные: 11 01 01 01
+    spi_engine_write_and_read(*spi_eng,(uint8_t *)&tx_buf, 2);
+    usleep(100);
+
+    tx_buf[0] = 0x0F; // Адрес регистра конфигурации портов P[27:24]
+    tx_buf[1] = 0x5D; // Данные: 01 01 11 01
+    spi_engine_write_and_read(*spi_eng,(uint8_t *)&tx_buf, 2);
+    usleep(100);
+
+    tx_buf[0] = 0x2c; // Запись портов Pх12]
+    tx_buf[1] = 0x00; // Данные:
+    spi_engine_write_and_read(*spi_eng,(uint8_t *)&tx_buf, 2);
+    usleep(100);
+
+    //tx_buf[0] = 0x55; // Запись портов P[28:21]
+    //tx_buf[1] = 0x00; // Данные:
+    //spi_engine_write_and_read(*spi_eng,(uint8_t *)&tx_buf, 2);
+    //usleep(100);
+
+
+    tx_buf[0] = 0x04; // Адрес регистра конфигурации
+    tx_buf[1] = 0x01; // Данные: Shutdown Control = Normal Operation
+    spi_engine_write_and_read(*spi_eng,(uint8_t *)&tx_buf, 2);
+    usleep(100);
+
+
+
+
+    return;
+
+
+}
+
+
+
+void spi_engine_npu_pow_board_init(struct no_os_spi_desc**  spi_eng)
+{
+    struct spi_engine_init_param spi_engine_init_par;
+    spi_engine_init_par.spi_engine_baseaddr =  SPI_ENGINE_NPU_BASEADDR;
+    spi_engine_init_par.type = SPI_ENGINE;
+    spi_engine_init_par.data_width = 8;
+    spi_engine_init_par.cs_delay = 100;
+    spi_engine_init_par.ref_clk_hz = 100000000;
+    spi_engine_init_par.sdo_idle_state = 1;
+
+
+    struct no_os_spi_init_param no_os_spi_init;
+    no_os_spi_init.extra = &spi_engine_init_par;
+    ////no_os_spi_init.parent = &spi_eng;
+    no_os_spi_init.mode=NO_OS_SPI_MODE_0;
+    no_os_spi_init.device_id = 1;
+    no_os_spi_init.chip_select =  NPU_POW_BOARD_CS;
+    no_os_spi_init.max_speed_hz = 25000000;
+
+    spi_engine_init(spi_eng, &no_os_spi_init);
+    spi_engine_set_speed(*spi_eng, 1000000);
+
+    //MAX7301AAX+
+    uint8_t tx_buf[2];
+
+    tx_buf[0] = 0x00;
+    tx_buf[1] = 0x00;
+    spi_engine_write_and_read(*spi_eng,(uint8_t *)&tx_buf, 2);
+    usleep(100);
+
+    //00 -вход, 01 - вход с подтяжкой, 10- выход, 11 - не используется
+    tx_buf[0] = 0x09; // Адрес регистра конфигурации портов P[7:4]
+    tx_buf[1] = 0xf5; // Данные: 11 11 01 01
+    spi_engine_write_and_read(*spi_eng,(uint8_t *)&tx_buf, 2);
+    usleep(100);
+
+    tx_buf[0] = 0x0A; // Адрес регистра конфигурации портов P[11:8]
+    tx_buf[1] = 0xff; // Данные: 11 11 11 11
+    spi_engine_write_and_read(*spi_eng,(uint8_t *)&tx_buf, 2);
+    usleep(100);
+
+    tx_buf[0] = 0x0B; // Адрес регистра конфигурации портов P[15:12]
+    tx_buf[1] = 0xff; // Данные: 11 11 11 11
+    spi_engine_write_and_read(*spi_eng,(uint8_t *)&tx_buf, 2);
+    usleep(100);
+
+    tx_buf[0] = 0x0C; // Адрес регистра конфигурации портов P[19:16]
+    tx_buf[1] = 0xff; // Данные: 11 11 11 11
+    spi_engine_write_and_read(*spi_eng,(uint8_t *)&tx_buf, 2);
+    usleep(100);
+
+    tx_buf[0] = 0x0D; // Адрес регистра конфигурации портов P[23:20]
+    tx_buf[1] = 0xff; // Данные: 11 11 11 11
+    spi_engine_write_and_read(*spi_eng,(uint8_t *)&tx_buf, 2);
+    usleep(100);
+
+    tx_buf[0] = 0x0E; // Адрес регистра конфигурации портов P[27:24]
+    tx_buf[1] = 0xff; // Данные: 11 11 11 11
+    spi_engine_write_and_read(*spi_eng,(uint8_t *)&tx_buf, 2);
+    usleep(100);
+
+    tx_buf[0] = 0x0F; // Адрес регистра конфигурации портов P[27:24]
+    tx_buf[1] = 0xff; // Данные: 11 11 11 11
+    spi_engine_write_and_read(*spi_eng,(uint8_t *)&tx_buf, 2);
+    usleep(100);
+
+    tx_buf[0] = 0x40; // Запись портов P[7:4]
+    tx_buf[1] = 0x03;
+    spi_engine_write_and_read(*spi_eng,(uint8_t *)&tx_buf, 2);
+    usleep(100);
+
+    tx_buf[0] = 0x04; // Адрес регистра конфигурации
+    tx_buf[1] = 0x01; // Данные: Shutdown Control = Normal Operation
+    spi_engine_write_and_read(*spi_eng,(uint8_t *)&tx_buf, 2);
+    usleep(100);
+
+    return;
 }
 
 
@@ -331,13 +303,13 @@ void spi_engine_npu_pow_board_init(struct no_os_spi_desc** spi_eng)
 	tx_buf[1] = 0x00;
 	spi_engine_write_and_read(spi_eng,(uint8_t *)&tx_buf, 2);
 
-	status_npu->tx_panel_1.word = tx_buf[1]; // !!!!!!!!!!!!!!! .. 7:0 -> 0:7
+	status_npu->tx_panel_1.word = tx_buf[1]; // !!!!!!!!!!!!!!! м.б. 7:0 -> 0:7
 
 	tx_buf[0] = 0xCD;
 	tx_buf[1] = 0x00;
 	spi_engine_write_and_read(spi_eng,(uint8_t *)&tx_buf, 2);
 
-	status_npu->tx_panel_2.word = tx_buf[1]; // !!!!!!!!!!!!!!!!!! .. 7:0 -> 0:7
+	status_npu->tx_panel_2.word = tx_buf[1]; // !!!!!!!!!!!!!!!!!! м.б. 7:0 -> 0:7
 
 }
 
@@ -346,42 +318,42 @@ void spi_engine_npu_pow_board_init(struct no_os_spi_desc** spi_eng)
 {
 
    uint8_t tx_buf[2];
-   if ( com_dev ==TX_PANEL_1 ) //    1
+   if ( com_dev ==TX_PANEL_1 ) // Питание панели передающей №1
    {
 		tx_buf[0] = 0x2C;
 		tx_buf[1] = ena;
 		spi_engine_write_and_read(spi_eng,(uint8_t *)&tx_buf, 2);
    }
 
-   if ( com_dev ==TX_PANEL_2 ) //    2
+   if ( com_dev ==TX_PANEL_2 ) // Питание панели передающей №2
    {
 		tx_buf[0] = 0x35;
 		tx_buf[1] = ena;
 		spi_engine_write_and_read(spi_eng,(uint8_t *)&tx_buf, 2);
    }
 
-   if ( com_dev ==RX_PANEL_1 ) //    1
+   if ( com_dev ==RX_PANEL_1 ) // Питание панели приемной №1
    {
 		tx_buf[0] = 0x36;
 		tx_buf[1] = ena;
 		spi_engine_write_and_read(spi_eng,(uint8_t *)&tx_buf, 2);
    }
 
-   if ( com_dev ==RX_PANEL_2 ) //    2
+   if ( com_dev ==RX_PANEL_2 ) // Питание панели приемной №2
    {
 		tx_buf[0] = 0x37;
 		tx_buf[1] = ena;
 		spi_engine_write_and_read(spi_eng,(uint8_t *)&tx_buf, 2);
    }
 
-   if ( com_dev ==RX_PANEL_3 ) //    3
+   if ( com_dev ==RX_PANEL_3 ) // Питание панели приемной №3
    {
 		tx_buf[0] = 0x38;
 		tx_buf[1] = ena;
 		spi_engine_write_and_read(spi_eng,(uint8_t *)&tx_buf, 2);
    }
 
-   if ( com_dev ==RX_PANEL_4 ) //    4
+   if ( com_dev ==RX_PANEL_4 ) // Питание панели приемной №4
    {
 		tx_buf[0] = 0x39;
 		tx_buf[1] = ena;
@@ -392,20 +364,14 @@ void spi_engine_npu_pow_board_init(struct no_os_spi_desc** spi_eng)
 
 
 
+ //void spi_engine_npu_pow_board_set_f_diap(struct no_os_spi_desc*  spi_eng,  pow_cntrl_type typ )
  void spi_engine_npu_pow_board_set_f_diap(struct no_os_spi_desc*  spi_eng_com, struct no_os_spi_desc*  spi_eng,  pow_cntrl_type typ )
-{
+
+ {
         uint8_t tx_buf[2];
 		tx_buf[0] =  0x40;
 		tx_buf[1] =   typ;
 		spi_engine_write_and_read(spi_eng,(uint8_t *)&tx_buf, 2);
-
-
-
-
-
-
-
-
 
 
 
@@ -419,8 +385,11 @@ void spi_engine_npu_pow_board_init(struct no_os_spi_desc** spi_eng)
 		spi_engine_write_and_read(spi_eng_com,(uint8_t *)&tx_buf, 2);
 
 		tx_buf[0] =  0x3C;
-	    tx_buf[1] =  typ_0;
-	    spi_engine_write_and_read(spi_eng_com,(uint8_t *)&tx_buf, 2);
+		tx_buf[1] =  typ_0;
+		spi_engine_write_and_read(spi_eng_com,(uint8_t *)&tx_buf, 2);
+
+
+ }
 
 
 
@@ -428,121 +397,101 @@ void spi_engine_npu_pow_board_init(struct no_os_spi_desc** spi_eng)
 
 
 
-}
-
-
-
-
-
-
-
-void ppos_set_tangenta(struct no_os_spi_desc*  spi_eng, ena_type ena)
+void ppos_set_tangenta(ena_type ena)
 {
     ppos.creg2.inside.Tang = ena;
-    creg_sync(CREG_GROUP_BASE, 2);
+    AXI_CNTRL_REG_WRITE(AXI_CNTRL_REG_BASEADDR, 8, ppos.creg2.word);
 }
 
 
-/* ===================================================================
- *  CREG access вЂ” table-driven RAMв†”PL bridge
- * =================================================================== */
 
-typedef struct {
-    uint32_t    base_offset;
-    uint8_t     num_cregs;
-    const char *name;
-} creg_block_t;
 
-static const creg_block_t creg_blocks[CREG_GROUP_COUNT] = {
-    [CREG_GROUP_BASE]     = { BASE_PAR_OFFSET,     BASE_PAR_NUM_CREGS, "ppos"     },
-    [CREG_GROUP_TX_CHAN0] = { TX_CHAN0_PAR_OFFSET, TX_CHAN0_NUM_CREGS, "tx_chan0" },
-    [CREG_GROUP_RX_CHAN0] = { RX_CHAN0_PAR_OFFSET, RX_CHAN0_NUM_CREGS, "rx_chan0" },
-};
 
-/* RAM mirror access. The first N fields of each struct are 32-bit
- * unions laid out contiguously (#pragma pack(1)), so [idx] indexes
- * the same word the PL sees at base_offset + idx*4. */
-static uint32_t *creg_ram_ptr(creg_group_t group, uint8_t idx)
+
+
+
+
+
+
+
+ /*
+
+ void spi_engine_npu_com_board_set_sd_on(struct no_os_spi_desc*  spi_eng)
 {
-    if (group >= CREG_GROUP_COUNT) return NULL;
-    if (idx   >= creg_blocks[group].num_cregs) return NULL;
-    switch (group) {
-        case CREG_GROUP_BASE:     return &((uint32_t *)&ppos)[idx];
-        case CREG_GROUP_TX_CHAN0: return &((uint32_t *)&tx_chan0)[idx];
-        case CREG_GROUP_RX_CHAN0: return &((uint32_t *)&rx_chan0)[idx];
-        default:                  return NULL;
-    }
+        uint8_t tx_buf[2];
+		tx_buf[0] =  0x04;
+		tx_buf[1] =  0x00;
+		spi_engine_write_and_read(spi_eng,(uint8_t *)&tx_buf, 2);
 }
 
-void creg_sync(creg_group_t group, uint8_t idx)
+ void spi_engine_npu_com_board_set_sd_off(struct no_os_spi_desc*  spi_eng)
 {
-    uint32_t *ram = creg_ram_ptr(group, idx);
-    if (!ram) return;
-    AXI_CNTRL_REG_WRITE(AXI_CNTRL_REG_BASEADDR + creg_blocks[group].base_offset,
-                        idx * 4, *ram);
+        uint8_t tx_buf[2];
+		tx_buf[0] =  0x04;
+		tx_buf[1] =  0x01;
+		spi_engine_write_and_read(spi_eng,(uint8_t *)&tx_buf, 2);
 }
 
-/* AD9361 side-effects: dispatched by (group, idx) when creg is applied. */
-static void cb_tx_lo_freq(uint32_t word)
+ void spi_engine_npu_com_board_set_sd_status(struct no_os_spi_desc*  spi_eng)
 {
-    /* word is freq in kHz; AD9361 API takes Hz. */
-    ad9361_set_tx_lo_freq(ad9361_phy, (uint64_t)word * 1000);
+        uint8_t tx_buf[2];
+		tx_buf[0] =  0x84;
+		tx_buf[1] =  0x00;
+		spi_engine_write_and_read(spi_eng,(uint8_t *)&tx_buf, 2);
+
+		//tx_buf[0] =  0x00;
+		//tx_buf[1] =  0x00;
+		//spi_engine_write_and_read(spi_eng,(uint8_t *)&tx_buf, 2);
+
+		xil_printf("com_board_set_sd_status = %02X \n\r ", tx_buf[1]);
 }
-static void cb_rx_lo_freq(uint32_t word)
+
+
+
+
+ void spi_engine_npu_pow_board_get_status(struct no_os_spi_desc*  spi_eng, struct stat_npu* status_npu)
 {
-    ad9361_set_rx_lo_freq(ad9361_phy, (uint64_t)word * 1000);
+
+	uint8_t tx_buf[2];
+	tx_buf[0] = 0xA4;
+	tx_buf[1] = 0x00;
+	spi_engine_write_and_read(spi_eng,(uint8_t *)&tx_buf, 2);
+
+	status_npu->cntrl_temp_filt_board = 0x01&tx_buf[1];
+
 }
-static void cb_tx_atten(uint32_t word)
+
+
+
+ void spi_engine_npu_pow_board_set_ena(struct no_os_spi_desc*  spi_eng, pow_cntrl_type cntrl_type,  ena_type ena )
 {
-    /* low 10 bits = atten in 250-mdB units. */
-    ad9361_set_tx_attenuation(ad9361_phy, 1, (word & 0x3FF) * 250);
+
+   uint8_t tx_buf[2];
+   if ( cntrl_type == UF_DIAP_1 ) // Включение частотного диапазона №1 ячейки фильтрации
+   {
+		tx_buf[0] = 0x25;
+		tx_buf[1] = ena;
+		spi_engine_write_and_read(spi_eng,(uint8_t *)&tx_buf, 2);
+   }
+
+   if ( cntrl_type == UF_PIT )    // Питание ячейки фильтрации
+   {
+		tx_buf[0] = 0x26;
+		tx_buf[1] = ena;
+		spi_engine_write_and_read(spi_eng,(uint8_t *)&tx_buf, 2);
+   }
+
+   if ( cntrl_type ==  UF_DIAP_2 ) // Включение частотного диапазона №2 ячейки фильтрации
+   {
+		tx_buf[0] = 0x27;
+		tx_buf[1] = ena;
+		spi_engine_write_and_read(spi_eng,(uint8_t *)&tx_buf, 2);
+   }
+
 }
 
-typedef void (*creg_cb_t)(uint32_t);
 
-#define CREG_MAX_PER_BLOCK 8
-static const creg_cb_t creg_ad9361_cbs[CREG_GROUP_COUNT][CREG_MAX_PER_BLOCK] = {
-    [CREG_GROUP_TX_CHAN0] = {
-        [2] = cb_tx_lo_freq,
-        [3] = cb_tx_atten,
-    },
-    [CREG_GROUP_RX_CHAN0] = {
-        [1] = cb_rx_lo_freq,
-    },
-};
-
-/* TX/RX creg0: bit 12 ('run') is forced to 0 on every reconfigure so
- * PL halts cleanly. send-path re-enables it lazily. */
-#define CREG0_RUN_MASK    (1u << 12)
-
-/* TX creg3: only low 10 bits are atten; reserved bits must stay 0. */
-#define TX_CREG3_VALID    0x3FFu
-
-static uint32_t creg_pre_write_fixup(creg_group_t group, uint8_t idx, uint32_t word)
-{
-    if (idx == 0 &&
-        (group == CREG_GROUP_TX_CHAN0 || group == CREG_GROUP_RX_CHAN0))
-        word &= ~CREG0_RUN_MASK;
-
-    if (group == CREG_GROUP_TX_CHAN0 && idx == 3)
-        word &= TX_CREG3_VALID;
-
-    return word;
-}
-
-void creg_apply(creg_group_t group, uint8_t idx, uint32_t word)
-{
-    uint32_t *ram = creg_ram_ptr(group, idx);
-    if (!ram) return;
-
-    word = creg_pre_write_fixup(group, idx, word);
-    *ram = word;
-    AXI_CNTRL_REG_WRITE(AXI_CNTRL_REG_BASEADDR + creg_blocks[group].base_offset,
-                        idx * 4, word);
-
-    creg_cb_t cb = creg_ad9361_cbs[group][idx];
-    if (cb) cb(word);
-}
+*/
 
 
  void modem_init()
@@ -560,34 +509,57 @@ void creg_apply(creg_group_t group, uint8_t idx, uint32_t word)
 
 	 #endif
 
+	 ppos.creg2.word = 0;
 
-     ppos.creg2.inside.Tang = 0;
+
+
+     #ifdef  IS_BORT
+
+	 ppos.creg2.inside.Pit = 1;
+	 ppos.creg2.inside.Fdiap = 0;
+	 ppos.creg2.inside.GPIOnR_TYPE = 2;
+
+     #else
+	  ppos.creg2.inside.GPIOnR_TYPE = 1;
+     #endif
+
+	 ppos.creg2.inside.Tang = 0;
 	 ppos.creg2.inside.Tang_avt = 0;
-	 ppos.creg2.inside.GPIOnR_TYPE = 1;
+	 //ppos.creg2.inside.GPIOnR_TYPE = 1;
 
-     creg_sync(CREG_GROUP_BASE, 2);
+     AXI_CNTRL_REG_WRITE(AXI_CNTRL_REG_BASEADDR, 8, ppos.creg2.word);
 
 
+     ppos.creg3.word = 0;
+     ppos.creg3.inside.AD9361_ENABLE =1;
+	 ppos.creg3.inside.AD9361_TXnRX = 1;
+     #ifdef IS_MASTER
+	  ppos.creg3.inside.ENABLE_AUTO = 1;
+     #endif
+     #ifdef IS_SLAVE
+      ppos.creg3.inside.ENABLE_AUTO = 0;
+     #endif
+	 ppos.creg3.inside.TXnRX_AUTO = 1;
+     ppos.creg3.inside.MasterNSlave = 0;
+     ppos.creg3.inside.IS_TDMA = 1;
 
-	 ppos.creg4.inside.txnrx_setup = 2000;
+     AXI_CNTRL_REG_WRITE(AXI_CNTRL_REG_BASEADDR, 12, ppos.creg3.word);
+
+
+	 ppos.creg4.inside.txnrx_setup = 4500;
 	 ppos.creg4.inside.txnrx_hold =  4500;
 
-	 creg_sync(CREG_GROUP_BASE, 4);
+	 AXI_CNTRL_REG_WRITE(AXI_CNTRL_REG_BASEADDR, 16, ppos.creg4.word);
 
-     ppos.status_on = 0;
-     ppos.status_ip[0] = 192;
-     ppos.status_ip[1] = 168;
-     ppos.status_ip[2] = 250;
-     ppos.status_ip[3] = 22;
 
+	 ppos.creg5.inside.slot_dur = 4000;//1000;
+
+	 AXI_CNTRL_REG_WRITE(AXI_CNTRL_REG_BASEADDR, 20, ppos.creg5.word);
+
+
+     ppos.status_on = 1;
+     IP4_ADDR(&ppos.status_ip, 192, 168, 250, 22);
      ppos.status_port = 5007;
-
-
-
-
-
-
-
 
 
 
@@ -598,25 +570,36 @@ void creg_apply(creg_group_t group, uint8_t idx, uint32_t word)
 	 tx_chan0.creg0.inside.code = 0;
 	 tx_chan0.creg0.inside.mod = 2;
 	 tx_chan0.creg0.inside.mux_ad9361_din = 5;
-	 tx_chan0.creg0.inside.pkt_len = 576;
+	 tx_chan0.creg0.inside.pkt_len = 4800;//576;
 	 tx_chan0.creg0.inside.scr_on = 1;
+	 tx_chan0.creg0.inside.gain = 0;
 	 tx_chan0.creg0.inside.run = 0;
 
-	 creg_sync(CREG_GROUP_TX_CHAN0, 0);
+	 AXI_CNTRL_REG_WRITE(AXI_CNTRL_REG_BASEADDR + TX_CHAN0_PAR_OFFSET, 0, tx_chan0.creg0.word);
 
 
-  	 tx_chan0.creg2.inside.ad9361_tx_freq = 3500000; /* kHz */
-  	 creg_apply(CREG_GROUP_TX_CHAN0, 2, tx_chan0.creg2.word);
+  	 tx_chan0.creg2.inside.ad9361_tx_freq = 3500000;//kHz
+  	 AXI_CNTRL_REG_WRITE(AXI_CNTRL_REG_BASEADDR + TX_CHAN0_PAR_OFFSET, 2*4,  (u32) tx_chan0.creg2.word);
 
-  	 tx_chan0.creg3.inside.ad9361_tx_atten = 40000 / 250; /* mdB / 250 */
-  	 creg_apply(CREG_GROUP_TX_CHAN0, 3, tx_chan0.creg3.word);
+  	 uint64_t freq =  tx_chan0.creg2.word;
+  	 freq = freq*1000;
+  	 ad9361_set_tx_lo_freq (ad9361_phy, freq);
+
+
+  	 tx_chan0.creg3.inside.ad9361_tx_atten = 0x000003ff&(40000/250); //mdB/250  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!   Tx2
+  	 AXI_CNTRL_REG_WRITE(AXI_CNTRL_REG_BASEADDR + TX_CHAN0_PAR_OFFSET, 3*4,  (u32) tx_chan0.creg3.word);
+
+     uint32_t atten =  tx_chan0.creg3.inside.ad9361_tx_atten;
+     atten*=250;
+
+  	 ad9361_set_tx_attenuation (ad9361_phy, 1, atten);
 
 
 
 	 rx_chan0.creg0.inside.bod = 2;
 	 rx_chan0.creg0.inside.code = 0;
 	 rx_chan0.creg0.inside.mod = 2;
-	 rx_chan0.creg0.inside.pkt_len = 576;
+	 rx_chan0.creg0.inside.pkt_len = 4800;//576;
 	 rx_chan0.creg0.inside.scr_on = 1;
 	 rx_chan0.creg0.inside.rcos_filt_on = 1;
 	 rx_chan0.creg0.inside.rot_on = 1;
@@ -624,18 +607,33 @@ void creg_apply(creg_group_t group, uint8_t idx, uint32_t word)
 
 	 rx_chan0.creg0.inside.run = 0;
 
-	 creg_sync(CREG_GROUP_RX_CHAN0, 0);
+	 AXI_CNTRL_REG_WRITE(AXI_CNTRL_REG_BASEADDR + RX_CHAN0_PAR_OFFSET, 0, rx_chan0.creg0.word);
 
- 	 rx_chan0.creg1.inside.ad9361_rx_freq = 3500000; /* kHz */
- 	 creg_apply(CREG_GROUP_RX_CHAN0, 1, rx_chan0.creg1.word);
+
+ 	 rx_chan0.creg1.inside.ad9361_rx_freq = 3500000;
+     AXI_CNTRL_REG_WRITE(AXI_CNTRL_REG_BASEADDR + RX_CHAN0_PAR_OFFSET, 1*4,  (u32) rx_chan0.creg1.word);
+
+     freq =  rx_chan0.creg1.word;
+     freq = freq*1000;
+     ad9361_set_rx_lo_freq (ad9361_phy, freq);
 
 
 
 
 #ifdef IS_ZED_BOARD
+
+  //d[0]=0x80; d[1]=0x0a;d[2]=0x12;
+  //no_os_spi_write_and_read_11bit(&desc_tmp,&d[0],1);
+
 	 ad9361_set_rx_lo_freq (ad9361_phy,3500040000);
 	 ad9361_set_tx_lo_freq (ad9361_phy,3500040000);
+
 #endif
 
  }
+
+
+
+
+
 

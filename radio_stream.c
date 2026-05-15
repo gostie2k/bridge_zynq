@@ -16,7 +16,9 @@ extern struct netif port3_bridge;
 #define MAGIC_H 0xFA
 #define MAGIC_L 0xCE
 
-#define RING_SIZE (PL_BLOCK_SIZE * 512)
+//#define RING_SIZE (PL_BLOCK_SIZE * 512)
+
+#define RING_SIZE (PL_BLOCK_SIZE * 1024)
 
 extern XLlFifo fifo;
 
@@ -187,7 +189,7 @@ if (ReceiveLength==54)
 
 						if (!is_val)
 				{
-							xil_printf("!p54 is_val %08x %08x \n\r",preamb0,preamb1);
+							//xil_printf("!p54 is_val %08x %08x \n\r",preamb0,preamb1);
 				            return;
 				}
 
@@ -197,12 +199,12 @@ if (ReceiveLength==54)
 
 		if (check_rx!=check)
 			{
-				printf("cnt_seg_in=%04X check=%04X check_rx=%08X \n\r",cnt_seg_in,  check, check_rx);
+				//printf("cnt_seg_in=%04X check=%04X check_rx=%08X \n\r",cnt_seg_in,  check, check_rx);
                 return;
 			} else if (check_rx==0) return;
 
 
-		printf("cnt_seg_in=%04X check=%04X\n\r", cnt_seg_in, check);
+		//printf("cnt_seg_in=%04X check=%04X\n\r", cnt_seg_in, check);
 
         for (int i = 0; i < PL_RX_WORDS*4; i++) {
         	drain_rx_block[i] = fifo_buf[12+i];
@@ -312,21 +314,29 @@ static void send_block_to_pl(uint8_t *block) {
 
 // Блочная запись в tx_ring (вместо побайтовой tx_push)
 static void tx_push_block(const uint8_t *src, uint32_t len) {
+
+	uint32_t space_to_end = RING_SIZE - tx_head;
+    uint32_t chunk = (space_to_end < len) ? space_to_end : len;
+
     while (len > 0) {
-        uint32_t space_to_end = RING_SIZE - tx_head;
-        uint32_t chunk = (space_to_end < len) ? space_to_end : len;
+
         memcpy(&tx_ring[tx_head], src, chunk);
         tx_head = (tx_head + chunk) % RING_SIZE;
         tx_count += chunk;
         src += chunk;
         len -= chunk;
+
+        chunk = len;
     }
 }
 
 void tx_process() {
     while (tx_count >= BLOCK_PAYLOAD_SIZE) {
         // Если TX FIFO полон — выходим, radio_poll дошлёт
-        if (XLlFifo_iTxVacancy(&fifo) < (PL_BLOCK_SIZE / 4)) {
+        //if (XLlFifo_iTxVacancy(&fifo) < (PL_BLOCK_SIZE / 4)) {
+        if (XLlFifo_iTxVacancy(&fifo) < ((PL_BLOCK_SIZE+28) / 4) ) {
+
+
             dbg_err_tx_stall++;
             break;
         }
@@ -357,21 +367,6 @@ err_t radio_linkoutput(struct netif *netif, struct pbuf *p) {
         dbg_err_tx_reject++;
         return ERR_MEM;
     }
-
-    // ===== DBG #2 =====
-       {
-           static int n2 = 0;
-           if (p->tot_len > 1000 && (n2++ % 50) == 0) {
-               uint8_t *d = (uint8_t*)p->payload;
-               xil_printf("[M-TX2] tot=%d len=%d hdr_len_will_be=%d  %02X%02X%02X%02X%02X%02X %02X%02X%02X%02X%02X%02X %02X%02X\r\n",
-                   p->tot_len, p->len, p->tot_len,
-                   d[0],d[1],d[2],d[3],d[4],d[5],
-                   d[6],d[7],d[8],d[9],d[10],d[11],
-                   d[12],d[13]);
-           }
-       }
-       // ===== END =====
-
 
     dbg_tx_pkts++;
 
@@ -538,21 +533,6 @@ void radio_input_block(uint8_t *block_188, struct netif *inp_netif) {
                 if (rx_recv_crc == rx_calc_crc) {
                     dbg_rx_pkts++;
 
-
-                    // ===== DBG #3 =====
-                       {
-                           static int n3 = 0;
-                           if (rx_pkt_len > 1000 && (n3++ % 50) == 0) {
-                               uint8_t *d = rx_pkt_buffer;
-                               xil_printf("[S-RX3] hdr_len=%d  %02X%02X%02X%02X%02X%02X %02X%02X%02X%02X%02X%02X %02X%02X\r\n",
-                                   rx_pkt_len,
-                                   d[0],d[1],d[2],d[3],d[4],d[5],
-                                   d[6],d[7],d[8],d[9],d[10],d[11],
-                                   d[12],d[13]);
-                           }
-                       }
-                       // ===== END =====
-
                     //struct pbuf *p = pbuf_alloc(PBUF_RAW, rx_pkt_len, PBUF_RAM);
                     struct pbuf *p = pbuf_alloc(PBUF_TRANSPORT, rx_pkt_len, PBUF_RAM);
 
@@ -574,19 +554,7 @@ void radio_input_block(uint8_t *block_188, struct netif *inp_netif) {
                     	   lwip_htons(ethhdr->type) , p->tot_len  );
                     	}
 
-                    	 // ===== DBG #4 =====
-                    	    {
-                    	        static int n4 = 0;
-                    	        if (p->tot_len > 1000 && (n4++ % 50) == 0) {
-                    	            uint8_t *d = (uint8_t*)p->payload;
-                    	            xil_printf("[S-RX4] tot=%d len=%d  %02X%02X%02X%02X%02X%02X %02X%02X%02X%02X%02X%02X %02X%02X\r\n",
-                    	                p->tot_len, p->len,
-                    	                d[0],d[1],d[2],d[3],d[4],d[5],
-                    	                d[6],d[7],d[8],d[9],d[10],d[11],
-                    	                d[12],d[13]);
-                    	        }
-                    	    }
-                    	    // ===== END =====
+
 
                         if (inp_netif->input != NULL) {
                             if (inp_netif->input(p, inp_netif) != ERR_OK) {

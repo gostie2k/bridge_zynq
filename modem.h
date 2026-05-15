@@ -12,30 +12,10 @@
 #ifndef MODEM_H_
 #define MODEM_H_
 
-/* ===================================================================
- *  CREG memory map (contract with PL)
- *
- *  AXI address of creg N in a block:
- *      AXI_CNTRL_REG_BASEADDR + block_offset + N*4
- *
- *  Three blocks share AXI_CNTRL_REG_BASEADDR. The 0x20/0x30 layout
- *  reserves 8 cregs per block in PL even though we use fewer.
- * =================================================================== */
-#define BASE_PAR_OFFSET       0x00   /* ppos.cregN     — global       */
-#define TX_CHAN0_PAR_OFFSET   0x20   /* tx_chan0.cregN — TX channel   */
-#define RX_CHAN0_PAR_OFFSET   0x30   /* rx_chan0.cregN — RX channel   */
-
-#define BASE_PAR_NUM_CREGS    6
-#define TX_CHAN0_NUM_CREGS    4
-#define RX_CHAN0_NUM_CREGS    2
-
-/* Group IDs as used by the 0xA0 protocol. */
-typedef enum {
-    CREG_GROUP_BASE     = 0,  /* not exposed via 0xA0 currently */
-    CREG_GROUP_TX_CHAN0 = 1,
-    CREG_GROUP_RX_CHAN0 = 2,
-    CREG_GROUP_COUNT
-} creg_group_t;
+//CREG OFFSET
+#define BASE_PAR_OFFSET 0
+#define TX_CHAN0_PAR_OFFSET 4*8
+#define RX_CHAN0_PAR_OFFSET 4*(8+4)
 
 #ifndef IS_QT
 
@@ -45,11 +25,24 @@ typedef enum {
 #include "axi_cntrl_reg/axi_cntrl_reg.h"
 #include "ad9361/ad9361_api.h"
 #include "sleep.h"
+#include "lwip/ip4_addr.h"
 
 #endif
 
+#ifdef IS_QT
+
+struct ip4_addr {
+  uint32_t addr;
+};
+
+#endif
+
+
+
 #include <stdio.h>
 #include <stdint.h>
+
+
 
 
 typedef enum {
@@ -113,6 +106,8 @@ struct stat_rx
 	float min_pow;
 	float acc_pow;
 
+	uint8_t max_gain_index;
+	uint8_t min_gain_index;
 };
 #pragma pack(pop)
 
@@ -212,7 +207,6 @@ struct stat_modem* stat_modem_init();
 void modem_fill_stats(stats_resp_t *resp);
 void modem_print_stats(void);
 
-void send_modem_status(struct stat_modem* status);
 
 
 /* ========== modem control structures (from video_debug version) ========== */
@@ -285,7 +279,7 @@ struct ppos_tx
 		  uint16_t scr_on: 1;
 		  uint16_t mux_ad9361_din:4;
           uint16_t run: 1;
-          uint16_t reserve:3;
+          uint16_t gain:3;
 	      uint16_t pkt_len;
 	    } inside;
 	} creg0;
@@ -351,11 +345,11 @@ struct ppos_par
 	   {
 		     //from bit#0....down to bit#31
 			     /** version */
-		         unsigned sn:12;
+		         uint32_t sn:12;
 		         /** product version */
-			     unsigned pv:8;
+		         uint32_t pv:8;
 			     /** product number */
-			     unsigned pn:12;
+		         uint32_t pn:12;
 	   } inside;
    } creg0;
 
@@ -367,12 +361,12 @@ struct ppos_par
 	  struct
 	   {
 	     //from bit#0....down to bit#31
-	     unsigned imit_ps_int_gpio_63:1;
-	     unsigned imit_ps_int_gpio_62:1;
-	     unsigned mfunc_start:1;
-	     unsigned test_gen_set_fc:1;
-	     unsigned set_dac_ltc2630:1;
-	     unsigned reserve:27;
+		 uint32_t imit_ps_int_gpio_63:1;
+		 uint32_t imit_ps_int_gpio_62:1;
+		 uint32_t mfunc_start:1;
+		 uint32_t test_gen_set_fc:1;
+		 uint32_t set_dac_ltc2630:1;
+		 uint32_t reserve:27;
 	    } inside;
 	} creg1;
 
@@ -384,35 +378,35 @@ struct ppos_par
 	  struct
 	   {
 	     //from bit#0....down to bit#31
-	     unsigned Rx1B:1; // !Rx1A
-	     unsigned Tx1B:1; // !Tx1A
-	     unsigned Rx2B:1; // !Rx2A
-	     unsigned Tx2B:1; // !Tx2A
-	     unsigned GPIO1R:1;
-	     unsigned GPIO2R:1;
-	     unsigned GPIO3R:1;
-	     unsigned GPIO4R:1;
-	     unsigned GPIO5R:1;
-	     unsigned GPIO6R:1;
-	     unsigned GPIO1R_DIR:1;
-		 unsigned GPIO2R_DIR:1;
-		 unsigned GPIO3R_DIR:1;
-		 unsigned GPIO4R_DIR:1;
-		 unsigned GPIO5R_DIR:1;
-		 unsigned GPIO6R_DIR:1;
-	     unsigned GPIOnR_TYPE:2;
-	     unsigned Tang:1;
-	     unsigned Tang_avt:1;
-	     unsigned Pit:1;
-	     unsigned Fdiap:3; //air: 0 - 3.4-3.6, !0 - 3.7-3.9
+		  uint32_t Rx1B:1; // !Rx1A
+		  uint32_t Tx1B:1; // !Tx1A
+		  uint32_t Rx2B:1; // !Rx2A
+		  uint32_t Tx2B:1; // !Tx2A
+		  uint32_t GPIO1R:1;
+		  uint32_t GPIO2R:1;
+		  uint32_t GPIO3R:1;
+		  uint32_t GPIO4R:1;
+		  uint32_t GPIO5R:1;
+		  uint32_t GPIO6R:1;
+		  uint32_t GPIO1R_DIR:1;
+		  uint32_t GPIO2R_DIR:1;
+		  uint32_t GPIO3R_DIR:1;
+		  uint32_t GPIO4R_DIR:1;
+		  uint32_t GPIO5R_DIR:1;
+		  uint32_t GPIO6R_DIR:1;
+		  uint32_t GPIOnR_TYPE:2;
+		  uint32_t Tang:1;
+		  uint32_t Tang_avt:1;
+		  uint32_t Pit:1;
+		  uint32_t Fdiap:3; //air: 0 - 3.4-3.6, !0 - 3.7-3.9
 
-	     unsigned GPIO1R_IN:1;
-		 unsigned GPIO2R_IN:1;
-		 unsigned GPIO3R_IN:1;
-		 unsigned GPIO4R_IN:1;
-		 unsigned GPIO5R_IN:1;
-		 unsigned GPIO6R_IN:1;
-		 unsigned reserve:2;
+		  uint32_t GPIO1R_IN:1;
+		  uint32_t GPIO2R_IN:1;
+		  uint32_t GPIO3R_IN:1;
+		  uint32_t GPIO4R_IN:1;
+		  uint32_t GPIO5R_IN:1;
+		  uint32_t GPIO6R_IN:1;
+		  uint32_t reserve:2;
 
 	    } inside;
 	} creg2;
@@ -426,11 +420,13 @@ struct ppos_par
 	  struct
 	   {
 		     //from bit#0....down to bit#31
-		     unsigned nuf_pit:1;
-		     unsigned uf_tangenta:1;
-		     unsigned uf_sel:1;
-		     unsigned uf_tangenta_ena_avt:1;
-		     unsigned reserve:28;
+		  uint32_t MasterNSlave:1;
+		  uint32_t TXnRX_AUTO:1;
+		  uint32_t ENABLE_AUTO:1;
+		  uint32_t AD9361_TXnRX:1;
+		  uint32_t AD9361_ENABLE:1;
+		  uint32_t IS_TDMA:1;
+		  uint32_t reserve:26;
 	    } inside;
 	} creg3;
 
@@ -450,6 +446,35 @@ struct ppos_par
 
 
 
+	  union
+	    {
+		  uint32_t word;
+		  struct
+		   {
+			  uint16_t slot_dur; //us
+			  uint16_t num_seg:6;
+			  uint16_t reserve:10;
+		    } inside;
+		} creg5;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 	/** set cmd ltc2630 */
    union
     {
@@ -461,7 +486,7 @@ struct ppos_par
 		     unsigned ltc2630_dac_com:4;
 		     unsigned reserve:20;
 	    } inside;
-	} creg5;
+	} creg6;
 
 
 
@@ -474,7 +499,7 @@ struct ppos_par
 	uint8_t   num_ppos_rxs;
 
 	uint8_t   status_on;
-	uint8_t   status_ip[4];
+	struct ip4_addr   status_ip;
 
 	uint16_t  status_port;
 
@@ -491,21 +516,13 @@ void spi_engine_npu_pow_board_init(struct no_os_spi_desc**  spi_eng);
 
 void spi_engine_npu_com_board_get_status(struct no_os_spi_desc*  spi_eng, struct stat_npu* status_npu);
 void spi_engine_npu_com_board_set_ena(struct no_os_spi_desc*  spi_eng, com_dev_type com_dev,  ena_type ena);
+//void spi_engine_npu_pow_board_get_status(struct no_os_spi_desc*  spi_eng, struct stat_npu* status_npu);
+//void spi_engine_npu_pow_board_set_ena(struct no_os_spi_desc*  spi_eng, pow_cntrl_type cntrl_type,  ena_type ena );
+//void spi_engine_npu_pow_board_set_f_diap(struct no_os_spi_desc*  spi_eng,  pow_cntrl_type typ );
 void spi_engine_npu_pow_board_set_f_diap(struct no_os_spi_desc*  spi_eng_com, struct no_os_spi_desc*  spi_eng,  pow_cntrl_type typ );
+void ppos_set_tangenta(ena_type ena);
 
-void ppos_set_tangenta(struct no_os_spi_desc*  spi_eng, ena_type ena);
 
-
-/* ===================================================================
- *  CREG access API
- *
- *  creg_sync   — push current RAM mirror of (group, idx) into PL.
- *  creg_apply  — set (group, idx) to `word`: patches RAM mirror,
- *                applies pre-write fixups (run=0 on creg0, atten mask),
- *                writes to PL, dispatches AD9361 side-effects.
- * =================================================================== */
-void creg_sync(creg_group_t group, uint8_t idx);
-void creg_apply(creg_group_t group, uint8_t idx, uint32_t word);
 
 
 void modem_init();

@@ -21,6 +21,7 @@
 #include "cmd_udp.h"
 #include "radio_stream.h"
 #include "lwip/timeouts.h"
+#include "lwip/sys.h"
 #include <stdio.h>
 #include "platform.h"
 #include "lwip/err.h"
@@ -28,6 +29,8 @@
 #include "netif/xadapter.h"
 #include "xtime_l.h"
 #include "xllfifo.h"
+#include "xllfifo_hw.h"
+
 #include "xil_printf.h"
 
 #include "vid_buf.h"
@@ -60,6 +63,8 @@
 #include "netif/bridgeif.h"
 #include "firewall.h"
 #include "watchdog.h"
+
+
 
 
 //struct circular_buffer_a;
@@ -246,8 +251,10 @@ u16_t RemotePortStatus = 5007;
 
 //------MERGE--------------
 struct udp_pcb *cmd_udp_pcb;
-
+struct udp_pcb *status_pcb;
 u16_t CmdPort = 60012;  // порт для приема команд управления
+
+u16_t StatusPort = 5008;
 //------MERGE--------------
 
 
@@ -517,7 +524,7 @@ AD9361_InitParam default_init_param = {
 
 
 	/* TX Attenuation Control */
-	40000, //50000,	//tx_attenuation_mdB *** adi,tx-attenuation-mdB
+	0, //50000,	//tx_attenuation_mdB *** adi,tx-attenuation-mdB
 	0,		//update_tx_gain_in_alert_enable *** adi,update-tx-gain-in-alert-enable
 
 
@@ -949,6 +956,7 @@ uint16_t cnt_s_pkt = 0;
 bool is_cntrl_pkt_end = false;
 float pow_cntrl_tx;
 float pow_rx;
+uint8_t gain_index_rx;
 bool is_pow_rx = false;
 bool is_pow_cntrl_tx = false;
 
@@ -1053,7 +1061,9 @@ if (  ((Status&0x20000000) == 0x20000000)&&(Bank == 3))
 
   rssi-=d[2];
 
-  pow_rx = rssi;
+  gain_index_rx = d[2];
+
+  pow_rx = rssi + 13.9397;//3500 tone corection
   is_pow_rx = true;
 
  // printf("#1 %.2f dB \n\r", rssi);
@@ -1120,160 +1130,14 @@ if (((Status&0x80000000) == 0x80000000)&&(Bank == 3))
 
  XGpioPs_IntrClearPin(Gpioint, 54+63);
 
-if (!is_run) return;
+//if (!is_run)
+	return;
 
 //u16 tx_len;
 //tx_len=fpga_regs[12];
 //tx_len<<=8;
 //tx_len+=fpga_regs[13];
 
-/*
-
-#ifdef IS_SLAVE
-//if (tx_len == 240000) //SLAVE
-//if ((fpga_regs[8]&0x80) == 0x00) //SLAVE
-//{
- struct  vid_pkt* voutput;
- if (vid_out->is_data) voutput = vid_out->pkt;
- else voutput = zero_vid_pkt;
-
- // add cmd pkt
- struct  cmd_pkt* coutput;
- if (cmd_out->is_data) coutput = cmd_out->pkt;
- else coutput = zero_cmd_pkt;
-
- memcpy((uint8_t*)voutput + 6, &cnt_s_pkt ,sizeof(uint16_t));
-
- cnt_s_pkt+=1;
-
- memcpy(voutput->head + 100, coutput->head+20  ,sizeof(uint16_t) );
- memcpy(voutput->head + 102, coutput->head+22  ,sizeof(uint8_t) );
- memcpy(voutput->tel, coutput->data  , 1518 );
-
- size = 2250;
- u32 fifo_size = XLlFifo_iTxVacancy(&fifo);
- //if (fifo_size >= 6+size   ) ///////////!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
- if (fifo_size >= size   )
- {
-
-	 u32 word;
-	 u32 check = 0;
-
-//	 for (int i = 0; i < 6; ++i) ///////////!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-//	 {
-//		memcpy(&word, (uint8_t*) &pream_new[0]+i*4,sizeof(word));
-//		word = swap32(word);
-//		XLlFifo_TxPutWord(&fifo, word);
-//	 }
-
-
-
- for (int i = 0; i < size; ++i) {
-
-
-
-	  memcpy(&word, (uint8_t*)voutput + (i * 4), sizeof(word));
-
-	 if (i == size - 1)
-				 {
-		             word = swap32(check);
-					 XLlFifo_TxPutWord(&fifo, word);
-				 }
-	 else
-	 {
-			 check+=word;
-			 word = swap32(word);
-			 XLlFifo_TxPutWord(&fifo, word);
-	 }
-
-	 }
- //XLlFifo_iTxSetLen(&fifo, (6+size)*4); ///////////!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
- XLlFifo_iTxSetLen(&fifo, (size)*4); ///////////!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-// }
- if (vid_out->is_data) vid_out->is_data = false;
- if (cmd_out->is_data) cmd_out->is_data = false;
-}
- return;
-//}
-
-#endif
-
-
-
-*/
-
-
-
-
-
-
- /*
-
-
-#ifdef IS_MASTER
-//if ((fpga_regs[8]&0x80) == 0x80) //MASTER
-//if (tx_len == 4800) // MASTER
-//{
-
- size = 450;
-
-u32 fifo_size = XLlFifo_iTxVacancy(&fifo);
-//if (fifo_size >= 6+size   ) { ///////////!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-if (fifo_size >= size   ) {
- struct  cmd_pkt* output;
-
- if (cmd_out->is_data) output = cmd_out->pkt;
- else output = zero_cmd_pkt;
-
- uint16_t sw_cnt_s_pkt = swap16(cnt_s_pkt);
-
- memcpy((uint8_t*)output + 6, &sw_cnt_s_pkt , sizeof(uint16_t));
- cnt_s_pkt+=1;
-
-u32 word;
-u32 check = 0;
-
-
-//for (int i = 0; i < 6; i++) ///////////!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-//{
-//	memcpy(&word,(uint8_t*) &pream_new[0]+i*4, sizeof(word));
-//	word = swap32(word);
-//	XLlFifo_TxPutWord(&fifo, word);
-//}
-
-
-
-for (int i = 0; i < size; i++) {
-
-			 memcpy(&word, (uint8_t*)output + (i * 4), sizeof(word));
-
-			 if (i == size - 1)
-			 {
-				 XLlFifo_TxPutWord(&fifo, check);
-			 }
-			 else
-			 {
-				 word = swap32(word);
-				 check+=word;
-			     XLlFifo_TxPutWord(&fifo, word);
-			 }
-		 }
-
- XLlFifo_iTxSetLen(&fifo, (size)*4);
-
- if (cmd_out->is_data) cmd_out->is_data = false;
-
-
- }
-
-
- return;
-//}
-#endif
-
-
-*/
-
 
 }
 
@@ -1285,99 +1149,22 @@ for (int i = 0; i < size; i++) {
 
 
 
-
-
-		 // TX ONLY DEBUG
-		 /*
-		 {
-			 data_vid* output_restored = malloc(sizeof(data_vid));
-			 memset(output_restored, 0x00, sizeof(data_vid));
-
-			 for (int i=0; i < size; ++i) {
-				 uint32_t RxWord;
-				 memcpy(&RxWord, start + i * 4, sizeof(RxWord));
-				 memcpy((uint8_t*)(output_restored) + (i * 4), &RxWord, sizeof(RxWord));
-			 }
-
-			  uint16_t sized[5] = {1269, 1269, 1269, 1269, 1269};
-			  memcpy((uint8_t*)sized + 0, (uint8_t*)(output_restored->head) + 80, sizeof(uint16_t));
-			  memcpy((uint8_t*)sized + 2, (uint8_t*)(output_restored->head) + 82, sizeof(uint16_t));
-			  memcpy((uint8_t*)sized + 4, (uint8_t*)(output_restored->head) + 84, sizeof(uint16_t));
-			  memcpy((uint8_t*)sized + 6, (uint8_t*)(output_restored->head) + 86, sizeof(uint16_t));
-			  memcpy((uint8_t*)sized + 8, (uint8_t*)(output_restored->head) + 88, sizeof(uint16_t));
-
-			  // OK
-//			  send_vid_packet_sized_deb(output_restored->vid_0, sized[0]);
-//			  send_vid_packet_sized_deb(output_restored->vid_1, sized[1]);
-//			  send_vid_packet_sized_deb(output_restored->vid_2, sized[2]);
-//			  send_vid_packet_sized_deb(output_restored->vid_3, sized[3]);
-//			  send_vid_packet_sized_deb(output_restored->vid_4, sized[4]);
-
-			  free(start);
-			  free(output_restored);
-		 }*/
-
-		 //err_inc_send_fifo();
-	//	 XLlFifo_iTxSetLen(&fifo, size*4);
-	 //}
- //}
-
- //free(output);
- //cnt_gr++;
-
- //if (vid_out->is_data) vid_out->is_data = false;
-
-
- //return; // next code is prev ver.
+u32_t sys_now(void) {
+    XTime tCur;
+    XTime_GetTime(&tCur);
+    // Преобразуем такты таймера (counts) в миллисекунды
+    // Частота таймера в Zynq обычно COUNTS_PER_SECOND = CPU_3x2x_CLK / 2
+    return (u32_t)(tCur / (COUNTS_PER_SECOND / 1000));
+}
 
 
 
-// if (fifo_krt_gr_dat[rad].gr_cnt == (uint16_t) (cnt_gr- cnt_gr_start_sent))
-// {
-
-//	 if (is_val_buf(&fifo_krt_gr_dat[0] , rad))
-//	 {
-//
-//	 size=(uint8_t*)&fifo_krt_gr_dat[rad].gr_size-(uint8_t*)&fifo_krt_gr_dat[rad];
-//     size/=4;
 
 
-//     uint8_t check=0;
-//     for (int i=0;i<7353; i++) check+=*((uint8_t*)&fifo_krt_gr_dat[rad].tel+i);
-//     fifo_krt_gr_dat[rad].head[16]=check;
 
 
-//     if (XLlFifo_iTxVacancy(&fifo)) {
-//  	   for(int i=0;i<size;i++)//2304
-//  	   {
-//           u32 word;
-//           memcpy(&word, ((uint32_t*)&fifo_krt_gr_dat[rad]) +i, 4);
-
-//           word=swap32(word);
-
-          // word = i;
 
 
-//  		   XLlFifo_TxPutWord(&fifo, word);
-//  	   }
-//           XLlFifo_iTxSetLen(&fifo, size*4);//9216
-//  }
-// }
-
-//    clear_val_buf(&fifo_krt_gr_dat[0] , rad);
-//    rad=(rad == FIFO_TX_DEPTH-1)?0:rad+1;
-
-//    send_debug_fifo_krt_gr_dat();
-// }
-// else
-// {
-//	send_debug_fifo_krt_gr_dat_empty();
-// }
-
-// send_request();
-// cnt_gr++;
-
-//}
 
 
 static XSysMon XADCMonInst;
@@ -1575,7 +1362,47 @@ int main()
     ////spi_engine_write_and_read(spi_eng, &ppp, 1);
 
 
-    AXI_CNTRL_REG_WRITE(AXI_CNTRL_REG_BASEADDR, 8, 0x00010000);
+
+     AXI_CNTRL_REG_WRITE(AXI_CNTRL_REG_BASEADDR, 8, 0x00010000);
+
+     spi_engine_npu_com_board_init(&spi_eng_npu_com_board);
+     spi_engine_npu_pow_board_init(&spi_eng_npu_pow_board);
+
+     #ifdef  IS_BORT
+
+     ppos.creg2.inside.Pit = 1;
+	 ppos.creg2.inside.Fdiap = 0;
+	 ppos.creg2.inside.GPIOnR_TYPE = 2;
+
+	 ppos.creg2.inside.Tang = 0;
+	 ppos.creg2.inside.Tang_avt = 0;
+
+     AXI_CNTRL_REG_WRITE(AXI_CNTRL_REG_BASEADDR, 8, ppos.creg2.word);
+
+     #endif
+
+
+
+
+
+
+
+
+    ppos.creg3.word = 0;
+    ppos.creg3.inside.AD9361_ENABLE =1;
+	ppos.creg3.inside.AD9361_TXnRX = 1;
+
+    AXI_CNTRL_REG_WRITE(AXI_CNTRL_REG_BASEADDR, 12, ppos.creg3.word);
+
+
+	ppos.creg5.inside.slot_dur = 2000;
+
+    AXI_CNTRL_REG_WRITE(AXI_CNTRL_REG_BASEADDR, 20, ppos.creg5.word);
+
+
+
+
+
 
 
 
@@ -1601,6 +1428,22 @@ int main()
     //no_os_spi_write_and_read_11bit(&desc_tmp,&d[0],1);
     //d[0]=0x84;d[1]=0x08;d[2]=0x00;
     //no_os_spi_write_and_read_11bit(&desc_tmp,&d[0],1);
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -1631,8 +1474,8 @@ int main()
 
 
 
-   spi_engine_npu_com_board_init(&spi_eng_npu_com_board);
-   spi_engine_npu_pow_board_init(&spi_eng_npu_pow_board);
+   //spi_engine_npu_com_board_init(&spi_eng_npu_com_board);
+   //spi_engine_npu_pow_board_init(&spi_eng_npu_pow_board);
 
 
 
@@ -1681,16 +1524,16 @@ int main()
 
 
  //fpga
-#ifdef IS_MASTER
+//#ifdef IS_MASTER
 //par[8],par[9],par[10],par[11] = 0x80,0x124f80
-d[0]=0x84;d[1]=0x08;d[2]=0xc0;
-no_os_spi_write_and_read_11bit(&desc_tmp,&d[0],1);
-d[0]=0x84;d[1]=0x09;d[2]=0x12;
-no_os_spi_write_and_read_11bit(&desc_tmp,&d[0],1);
-d[0]=0x84;d[1]=0x0a;d[2]=0x4f;
-no_os_spi_write_and_read_11bit(&desc_tmp,&d[0],1);
-d[0]=0x84;d[1]=0x0b;d[2]=0x80; //d[2]=0xe0;
-no_os_spi_write_and_read_11bit(&desc_tmp,&d[0],1);
+//d[0]=0x84;d[1]=0x08;d[2]=0xc0;
+//no_os_spi_write_and_read_11bit(&desc_tmp,&d[0],1);
+//d[0]=0x84;d[1]=0x09;d[2]=0x12;
+//no_os_spi_write_and_read_11bit(&desc_tmp,&d[0],1);
+//d[0]=0x84;d[1]=0x0a;d[2]=0x4f;
+//no_os_spi_write_and_read_11bit(&desc_tmp,&d[0],1);
+//d[0]=0x84;d[1]=0x0b;d[2]=0x80; //d[2]=0xe0;
+//no_os_spi_write_and_read_11bit(&desc_tmp,&d[0],1);
 
 /*
 //par[12],par[13],par[14],par[15] = 0x12c05dc0
@@ -1717,19 +1560,19 @@ no_os_spi_write_and_read_11bit(&desc_tmp,&d[0],1);
 //d[0]=0x84;d[1]=0x0f;d[2]=0xc0;
 //no_os_spi_write_and_read_11bit(&desc_tmp,&d[0],1);
 
-#endif
+//#endif
 
 
-#ifdef IS_SLAVE
+//#ifdef IS_SLAVE
 //par[8],par[9],par[10],par[11] = 0x80,0x124f00
-d[0]=0x84;d[1]=0x08;d[2]=0x40;
-no_os_spi_write_and_read_11bit(&desc_tmp,&d[0],1);
-d[0]=0x84;d[1]=0x09;d[2]=0x12;
-no_os_spi_write_and_read_11bit(&desc_tmp,&d[0],1);
-d[0]=0x84;d[1]=0x0a;d[2]=0x4f;
-no_os_spi_write_and_read_11bit(&desc_tmp,&d[0],1);
-d[0]=0x84;d[1]=0x0b;d[2]=0x80;
-no_os_spi_write_and_read_11bit(&desc_tmp,&d[0],1);
+//d[0]=0x84;d[1]=0x08;d[2]=0x40;
+//no_os_spi_write_and_read_11bit(&desc_tmp,&d[0],1);
+//d[0]=0x84;d[1]=0x09;d[2]=0x12;
+//no_os_spi_write_and_read_11bit(&desc_tmp,&d[0],1);
+//d[0]=0x84;d[1]=0x0a;d[2]=0x4f;
+//no_os_spi_write_and_read_11bit(&desc_tmp,&d[0],1);
+//d[0]=0x84;d[1]=0x0b;d[2]=0x80;
+//no_os_spi_write_and_read_11bit(&desc_tmp,&d[0],1);
 
 
 /*
@@ -1764,19 +1607,19 @@ no_os_spi_write_and_read_11bit(&desc_tmp,&d[0],1);
 
 
 
-#endif
+//#endif
 
 
 
 //par[5],par[6],par[20],par[21] = 0x1583d702
-d[0]=0x84;d[1]=0x06;d[2]=0x15;
-no_os_spi_write_and_read_11bit(&desc_tmp,&d[0],1);
-d[0]=0x84;d[1]=0x05;d[2]=0x83;
-no_os_spi_write_and_read_11bit(&desc_tmp,&d[0],1);
-d[0]=0x84;d[1]=0x15;d[2]=0xd7;
-no_os_spi_write_and_read_11bit(&desc_tmp,&d[0],1);
-d[0]=0x84;d[1]=0x14;d[2]=0x02;
-no_os_spi_write_and_read_11bit(&desc_tmp,&d[0],1);
+//d[0]=0x84;d[1]=0x06;d[2]=0x15;
+//no_os_spi_write_and_read_11bit(&desc_tmp,&d[0],1);
+//d[0]=0x84;d[1]=0x05;d[2]=0x83;
+//no_os_spi_write_and_read_11bit(&desc_tmp,&d[0],1);
+//d[0]=0x84;d[1]=0x15;d[2]=0xd7;
+//no_os_spi_write_and_read_11bit(&desc_tmp,&d[0],1);
+//d[0]=0x84;d[1]=0x14;d[2]=0x02;
+//no_os_spi_write_and_read_11bit(&desc_tmp,&d[0],1);
 
 //par[22] = 0x0a
 //d[0]=0x84;d[1]=0x16;d[2]=0x0a;
@@ -1878,13 +1721,6 @@ modem_init();
 
 
 
-
-
-
-
-
-
-
 //XGpioPs_WritePin(&Gpio_Ps, 46, 1);
 
 //platform_enable_interrupts();
@@ -1944,6 +1780,24 @@ lwip_init();
 
 
 
+    status_pcb = udp_new(); // send status & debug pkts
+    udp_bind_netif (status_pcb, &bridge_netif); //&udp_netif2);
+    status = udp_bind(status_pcb,  &bridge_netif.ip_addr, StatusPort);
+
+
+    cmd_udp_pcb = udp_new();
+    ip_set_option(cmd_udp_pcb, SOF_BROADCAST);
+
+    //udp_bind_netif(cmd_udp_pcb, &bridge_netif);
+    udp_bind(cmd_udp_pcb, IP_ADDR_ANY, CmdPort);
+    udp_recv(cmd_udp_pcb, cmd_udp_callback, NULL);
+    xil_printf("[INIT] cmd_udp_pcb bound to port %d on bridge_netif\r\n", CmdPort);
+
+
+
+
+
+
     //send_pcb = udp_new();
     recv_pcb = udp_new();
     udp_bind_netif (recv_pcb, &bridge_netif); //&udp_netif2);
@@ -1957,37 +1811,16 @@ lwip_init();
     udp_bind_netif (send_rx_data, &bridge_netif); //&udp_netif2);
 
 
+
     debug_pcb = udp_new(); // send status & debug pkts
     udp_bind_netif (debug_pcb, &bridge_netif); //&udp_netif2);
 
-    //status = udp_bind(debug_pcb,  &bridge_netif.ip_addr, CmdPort);
+
     //udp_recv(debug_pcb, cmd_udp_callback, NULL);
-
-    cmd_udp_pcb = udp_new();
-    ip_set_option(cmd_udp_pcb, SOF_BROADCAST);
-
-    //udp_bind_netif(cmd_udp_pcb, &bridge_netif);
-    udp_bind(cmd_udp_pcb, IP_ADDR_ANY, CmdPort);
-    udp_recv(cmd_udp_pcb, cmd_udp_callback, NULL);
-    xil_printf("[INIT] cmd_udp_pcb bound to port %d on bridge_netif\r\n", CmdPort);
 
 
 
     for (int i=0;i<FIFO_RX_DEPTH;i++) fifo_rx_buf[i].rx_is_val=0;
-
-
-    //stt = true;
-
-
-    //tx_chan0.creg0.inside.bod = 2;
-	//tx_chan0.creg0.inside.mod = 2;
-	//tx_chan0.creg0.inside.run = 1;
-
-	//AXI_CNTRL_REG_WRITE(AXI_CNTRL_REG_BASEADDR + TX_CHAN0_PAR_OFFSET, 0, tx_chan0.creg0.word);
-
-
-
-
 
 
 
@@ -2005,6 +1838,19 @@ lwip_init();
     while(1)
     {
     wdt_hb_main();
+
+    	//uint32_t fifo_rx_isr = AXI_CNTRL_REG_READ(FIFO_RX_DEV_BASE_ADDR + FIFO_ISR_OFFSET, 0);
+
+    	//uint32_t fifo_rx_isr = Xil_In32(FIFO_RX_DEV_BASE_ADDR + XLLF_ISR_OFFSET);
+        //if ( (fifo_rx_isr&0x00100000) == 0x00100000)
+        //{
+
+        //	printf("FIFO ERROR !!!!!!!!!!! \n\r");
+
+        	//Xil_Out32(FIFO_RX_DEV_BASE_ADDR + XLLF_RDFR_OFFSET, 0xA5); // Сброс RX FIFO [PG080]
+        	//Xil_Out32(FIFO_RX_DEV_BASE_ADDR + XLLF_ISR_OFFSET, 0xFFFFFFFF); // Очистка статусов [PG080]
+
+        //}
 
 
     if ( rx_chan0.creg0.inside.pkt_len == 4800 )
@@ -2107,7 +1953,7 @@ lwip_init();
     	cnt_uart_rx_buf=uart_cmd_chan(cnt_uart_rx_buf,&buf, &Uart1_Ps, &desc_tmp, &func_start, &func_type, &func_par[0], &fpga_regs[0]);
     	//tx_seg_on = ((fpga_regs[12]==0x02)&&(fpga_regs[13]==0x40));
     	//rx_seg_on = ((fpga_regs[14]==0x02)&&(fpga_regs[15]==0x40));
-    	debug_ram_load(&bufff_cnt, &bufff[0], &Gpio_Ps, &Uart1_Ps);
+    	//debug_ram_load(&bufff_cnt, &bufff[0], &Gpio_Ps, &Uart1_Ps);
     	exec_func(&func_start, func_type, &func_par[0]);
 
 #ifdef BRIDGE
@@ -2126,6 +1972,9 @@ lwip_init();
     	xemacif_input(echo_netif);
     	wdt_hb_lwip();
 
+        // Обработка таймеров (ARP, TCP, DHCP)
+        //sys_check_timeouts();
+
 
     	fifo_deb_read();
 
@@ -2140,12 +1989,24 @@ lwip_init();
     	    			status_modem->status_rx.max_pow = pow_rx;
     	    			status_modem->status_rx.min_pow = pow_rx;
     					status_modem->status_rx.acc_pow = pow_rx;
+
+
+    					status_modem->status_rx.max_gain_index = gain_index_rx;
+    					status_modem->status_rx.min_gain_index = gain_index_rx;
+
+
     	    		}
     	    		else
     	    		{
     	    			if (status_modem->status_rx.max_pow < pow_rx) status_modem->status_rx.max_pow = pow_rx;
     	    			if (status_modem->status_rx.min_pow > pow_rx) status_modem->status_rx.min_pow = pow_rx;
     	    			status_modem->status_rx.acc_pow += pow_rx;
+
+
+    	    			if (status_modem->status_rx.max_gain_index < gain_index_rx) status_modem->status_rx.max_gain_index = gain_index_rx;
+    	    		    if (status_modem->status_rx.min_gain_index > gain_index_rx) status_modem->status_rx.min_gain_index = gain_index_rx;
+
+
     	    		}
 
 
@@ -2161,7 +2022,7 @@ lwip_init();
 
 
 
-
+/*
 
 
     	if (is_pow_cntrl_tx)
@@ -2185,11 +2046,11 @@ lwip_init();
     		}
 
 
+*/
 
 
 
-
-
+/*
 
 
     if (is_cntrl_pkt_end)
@@ -2248,6 +2109,10 @@ lwip_init();
     	    	 }
 
 
+*/
+
+
+
 
 
 /*
@@ -2275,7 +2140,9 @@ lwip_init();
     	XTime_GetTime(&cur_time);
 
 
-    	 if (cur_time - mem_time >= XPAR_CPU_CORTEXA9_0_CPU_CLK_FREQ_HZ )
+    	 if (cur_time - mem_time >= COUNTS_PER_SECOND )
+
+
     	 {
     		 mem_time=cur_time;
 
@@ -2315,6 +2182,11 @@ lwip_init();
     		 status_modem->TempFPGA = TempData;
 
 
+
+
+    		 /*
+
+
     		 uint8_t d[] = {0x01,0x63,0x00,0x00};
     		 no_os_spi_write_and_read(&desc_tmp,&d[0],1);
     		 float pps_pow_cntrl = -d[2];
@@ -2324,6 +2196,10 @@ lwip_init();
     		 pps_pow_cntrl-=d[2];
 
     		 status_modem->pps_pow_cntrl = pps_pow_cntrl;
+
+
+
+
 
     		 d[0] = 0x01; d[1] = 0x61;
     		 no_os_spi_write_and_read(&desc_tmp,&d[0],1);
@@ -2339,8 +2215,52 @@ lwip_init();
     		 no_os_spi_write_and_read_11bit(&desc_tmp,&d[0],1);
     	     status_modem->gpio_status = d[2];
 
+*/
 
-    	     send_modem_status(status_modem);
+
+
+
+    		 //temp
+
+    		  uint8_t d[] = {0x01,0x61,0x00,0x00};
+    		  no_os_spi_write_and_read(&desc_tmp,&d[0],1);
+
+
+    		   float rssi = -d[2];
+    		   rssi/=4.;
+
+    		   d[0] = 0x02; d[1] = 0xb0;
+    		   no_os_spi_write_and_read(&desc_tmp,&d[0],1);
+    		   //xil_printf("%02X", d[2]);
+
+    		   rssi-=d[2];
+
+    		   gain_index_rx = d[2];
+
+    		   pow_rx = rssi + 13.9397;
+
+
+
+    		   status_modem->status_rx.max_pow = pow_rx;
+
+    	       status_modem->status_rx.max_gain_index = gain_index_rx;
+
+
+    		 //
+
+
+
+
+
+
+
+
+
+
+
+
+
+    	     send_modem_status(status_pcb, status_modem);
 
 
 
@@ -2372,20 +2292,21 @@ lwip_init();
 			 //status_modem->status_rx->min_pow,             status_modem->status_rx->max_pow,     status_modem->status_rx->acc_pow,
 			 //status_modem->status_rx->cnt_pkt, pps_pow_cntrl);
 
-    		 status_modem->status_cntrl_tx.cnt_pkt = 0;
-    		 status_modem->status_cntrl_tx.cnt_err_pkt = 0;
+    		 //status_modem->status_cntrl_tx.cnt_pkt = 0;
+    		 //status_modem->status_cntrl_tx.cnt_err_pkt = 0;
 
     		 status_modem->status_rx.cnt_pkt = 0;
-    		 status_modem->status_rx.cnt_err_pkt = 0;
+    		 //status_modem->status_rx.cnt_err_pkt = 0;
 
     	 }
 
 
 
 
+
+
+
     	wdt_kick();
-
-
     }
 
     cleanup_platform();
@@ -2417,7 +2338,15 @@ if (is_val)
 
 if (!is_val) xil_printf("! debug wrong: ReceiveLength =  %08x\n\r", ReceiveLength);
 
+
+#ifdef IS_MASTER
+
 if (is_val) send_deb();
+
+#endif
+
+
+
 
 
 }
@@ -2431,7 +2360,9 @@ if (is_val) send_deb();
 void send_deb() {
 
 
-	udp_bind_netif (debug_pcb, &bridge_netif); //&udp_netif2);
+	//udp_bind_netif (debug_pcb, &bridge_netif); //&udp_netif2);
+
+	//udp_bind_netif (status_pcb, &bridge_netif); //&udp_netif2);
 
     struct pbuf *p = pbuf_alloc(PBUF_TRANSPORT, 1024, PBUF_RAM);
     if (!p) {
@@ -2454,7 +2385,11 @@ void send_deb() {
     //    return;
     //}
 
-    err_t out = udp_sendto(debug_pcb, p, &RemoteAddr, RemotePortDeb);
+    //err_t out = udp_sendto(debug_pcb, p, &RemoteAddr, RemotePortDeb);
+
+    err_t out = udp_sendto(status_pcb, p, &RemoteAddr, RemotePortDeb);
+
+
 
     if (out != ERR_OK) {
         xil_printf("Error udp_sendto debug_pcb: %d\n\r", out);
@@ -2465,6 +2400,8 @@ void send_deb() {
     //xil_printf("Reset packet sent\n\r");
 }
 
+
+/*
 
 void send_modem_status(struct stat_modem* status) {
 
@@ -2492,7 +2429,7 @@ void send_modem_status(struct stat_modem* status) {
     pbuf_free(p);
 }
 
-
+*/
 
 
 
@@ -2714,7 +2651,17 @@ void fifo_rx_buf_write(struct vid_pkt* rx_buf, uint8_t* rx_wad, uint8_t* cmd_rx_
 				    if (check == check_solve)
 				       {
 				        struct pbuf *p;
-				        p = pbuf_alloc(PBUF_TRANSPORT, size, PBUF_RAM);
+				       // p = pbuf_alloc(PBUF_TRANSPORT, size, PBUF_RAM);
+
+				        p = pbuf_alloc(PBUF_RAW, size, PBUF_RAM);
+
+				        //if (size == 1514)
+				        //{
+				        //	printf("! %d\n\r",p->len);
+				        //}
+
+
+
 				        memcpy((uint8_t*) p->payload, &cmd_rx_buf[29], size);
 
 
@@ -3281,17 +3228,13 @@ static void exec_func(bool *func_start, u8 func_type, u8 *func_par)
     //if (func_type == 20) spi_engine_npu_pow_board_set_ena(spi_eng_npu_pow_board, *(pow_cntrl_type*) func_par, *(ena_type*)(func_par+1) );
     if (func_type == 19) spi_engine_npu_pow_board_set_f_diap(spi_eng_npu_com_board, spi_eng_npu_pow_board,  *(pow_cntrl_type*) func_par );
 
+    //spi_engine_npu_pow_board_set_f_diap(spi_eng_npu_pow_board,  *(pow_cntrl_type*) func_par );
+
     if (func_type == 20)
     	{
-    	   //xil_printf("func_type_20");
-
-    	   //ppos_set_tangenta(*(ena_type*) func_par);
-
-    	   ppos_set_tangenta(spi_eng_npu_com_board, *(ena_type*) func_par);
-
+    	   //printf("RRR");
+    	   ppos_set_tangenta(*(ena_type*) func_par);
     	}
-    if (func_type == 21) spi_engine_npu_pow_board_init(spi_eng_npu_pow_board);
-    if (func_type == 22) spi_engine_npu_com_board_init(spi_eng_npu_com_board);
 
 
     //if (func_type == 20) spi_engine_npu_com_board_set_sd_on(spi_eng_npu_com_board);
@@ -3612,6 +3555,7 @@ u32 size = 450;
 u32 fifo_size = XLlFifo_iTxVacancy(&fifo);
 
 if (fifo_size >= size   ) {
+
  struct  cmd_pkt* output;
 
  if (cmd_out->is_data) output = cmd_out->pkt;
