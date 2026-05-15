@@ -48,3 +48,9 @@ void radio_stream_get_stats(radio_stats_t *out);
 void radio_stream_set_loopback(int enable);
 int  radio_stream_get_loopback(void);
 void radio_stream_reset_rx_ids(void);  /* СЃР±СЂРѕСЃ pkt/seq gap СЃС‡С‘С‚С‡РёРєРѕРІ РїРµСЂРµРґ С‚РµСЃС‚РѕРј */
+
+/* Recovery handlers — локальный «soft restart» без PS reset.
+ * Каждая чистит state своей половины (TX или RX) + соответствующую
+ * сторону AXI FIFO. Безопасны для вызова из main loop и UDP-handler'а. */
+void radio_recover_tx(void);
+void radio_recover_rx(void);

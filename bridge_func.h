@@ -81,6 +81,12 @@ void print_dynamic_fdb(struct netif *bridgeif);
 
 void* bridgeif_get_dynamic_fdb(struct netif *bridgeif);
 
+/* Recovery handler — чистит dynamic FDB у bridge_netif.
+ * Используется когда MAC-learning bridgeif "запутался" и пакеты
+ * перестали ходить (или пошли не туда). Static-entries остаются.
+ * Возвращает количество очищенных entries. */
+u16_t bridge_recover_lwip(void);
+
 err_t vport2_init(struct netif *netif);
 err_t vport2_linkoutput(struct netif *netif, struct pbuf *p);
 

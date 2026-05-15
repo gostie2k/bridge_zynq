@@ -41,6 +41,42 @@ void print_dynamic_fdb(struct netif *bridgeif) {
     xil_printf("--- end dynamic FDB ---\n\r");
 }
 
+/* Recovery: чистим все dynamic FDB-entries у bridge_netif.
+ *
+ * Static-entries (заданные в BRIDGEIF_INITDATA1 — 16 штук с захардкоженными
+ * MAC'ами modem'ов) bridgeif хранит отдельно, их это не трогает.
+ *
+ * После cleanup bridgeif заново выучит активные источники из проходящего
+ * трафика. Это лечит ситуации:
+ *   - bridge выучил MAC на одном порту, потом устройство мигрировало → пакеты
+ *     к нему уходят не туда;
+ *   - таблица заполнена устаревшими entries (timer aging отключён в нашем
+ *     форке — см. bridgeif_fdb.c);
+ *   - lwIP stats показывают drops, но UDP control plane работает.
+ *
+ * Не трогаем udp_pcb — он не страдает от FDB-проблем, а его пересоздание
+ * из callback'а опасно для lwIP. */
+u16_t bridge_recover_lwip(void) {
+    bridgeif_fdb_dynamic_t *db =
+        (bridgeif_fdb_dynamic_t*)bridgeif_get_dynamic_fdb(&bridge_netif);
+    if (!db || !db->fdb) {
+        xil_printf("[RECOV] lwip: FDB pointer NULL — skip\r\n");
+        return 0;
+    }
+
+    u16_t cleared = 0;
+    for (u16_t i = 0; i < db->max_fdb_entries; i++) {
+        bridgeif_fdb_dynamic_entry_t *e = &db->fdb[i];
+        if (e->used) {
+            e->used = 0;
+            cleared++;
+        }
+    }
+    xil_printf("[RECOV] lwip: cleared %u dynamic FDB entries\r\n",
+               (unsigned)cleared);
+    return cleared;
+}
+
 
 
 

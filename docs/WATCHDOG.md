@@ -166,6 +166,81 @@ Magic byte `0xA5` обязателен. Прошивка отвечает `[0x90
 
 ---
 
+## Recovery — локальный «soft restart» без PS reset
+
+PS reset через WDT — тяжёлая операция (~3 сек простоя, заново AD9361 init ~1.1 сек, DDR/PLL re-init). Для случаев когда залип конкретный модуль, есть «локальный recovery» — чистка state одного модуля без перезагрузки всего PS.
+
+### Реализованные recovery-handler'ы
+
+| Функция | Что чинит | Что НЕ трогает |
+|---|---|---|
+| `radio_recover_tx()` | AXI FIFO TX side + ring `tx_ring` + `global_tx_pkt/seq_counter` | RX, stats, AD9361 |
+| `radio_recover_rx()` | AXI FIFO RX side + parser state `rx_state` + `rx_pkt_*`/`rx_calc_crc` | TX, stats, AD9361 |
+| `bridge_recover_lwip()` | dynamic FDB entries у `bridge_netif` (учим MAC заново) | static FDB, UDP PCB, netif state |
+
+Stats-счётчики ошибок (err_seq_gap, err_crc, ...) НЕ обнуляются — нужны для оценки частоты срабатываний recovery.
+
+### UDP-команды (ручной trigger)
+
+Все требуют magic byte `0x52` (= ASCII 'R') в `payload[2]`. Защита от случайного дёргания.
+
+#### `0x90 0x43 0x52` — Recover lwIP
+
+Чистит dynamic FDB-таблицу bridge_netif. После cleanup bridgeif начинает заново выучивать активные MAC из трафика. Static-entries (16 захардкоженных MAC'ов модемов из `BRIDGEIF_INITDATA1`) не трогаются.
+
+Когда полезно:
+- bridge выучил MAC на одном порту, потом устройство мигрировало → пакеты уходят не туда
+- таблица заполнена устаревшими entries (timer aging отключён в нашем форке `bridgeif_fdb.c`)
+- lwIP stats показывают drops, но UDP control plane работает
+
+Ответ: `[0x90][0x43][0x01][cleared_lo][cleared_hi]` — количество очищенных entries (LE16).
+
+#### `0x90 0x44 0x52` — Recover radio TX
+
+- `XLlFifo_TxReset(&fifo)` — drop всё что не успело уйти в PL
+- `tx_head/tail/count = 0`
+- `global_tx_pkt_counter/seq_counter = 0`
+
+Когда полезно:
+- `err_fifo_full` растёт лавинообразно (PS не успевает выгребать в FIFO, FIFO забит)
+- TX heartbeat «протух» — kernel зависал, FIFO в неконсистентном состоянии
+- После долгой паузы хочется чистый старт нумерации сегментов
+
+⚠️ Удалённый конец (master/slave) увидит **разрыв в `seq` и `pkt_id`** — `err_seq_gap`/`err_pkt_gap` у него инкрементнутся. Это нормально для recovery.
+
+Ответ: `[0x90][0x44][0x01]`.
+
+#### `0x90 0x45 0x52` — Recover radio RX
+
+- `XLlFifo_RxReset(&fifo)` — drop всё что не успели разобрать
+- Сброс RX парсера: `rx_state = ST_MAGIC_H`, `rx_pkt_len/received = 0`, `rx_calc_crc/recv_crc = 0`
+- `rx_first_block_seen/pkt_seen = 0` — следующий полученный block становится новой точкой отсчёта
+
+Когда полезно:
+- `err_crc` растёт но AD9361 заведомо OK (CRC-кейс может означать desync парсера)
+- RX heartbeat «протух» — `drain_rx_fifo` подавился неконсистентным block'ом
+- После manual TX recovery полезно сделать и RX recovery (parser ждал продолжения старого пакета)
+
+Ответ: `[0x90][0x45][0x01]`.
+
+### Безопасность recovery
+
+| Что | Безопасно? |
+|---|---|
+| Вызов из `cmd_udp_callback` (UDP-handler) | ✅ да |
+| Вызов из main loop | ✅ да |
+| Вызов из ISR | ❌ нет — `xil_printf` и FIFO writes не reentrant |
+| Параллельный вызов TX и RX recovery | ✅ да — они трогают разные данные |
+| Параллельный вызов с активным trafic'ом | ⚠️ возможна потеря в момент reset'а (~10 us) — нормально |
+
+### Roadmap
+
+**Этап 2 (не реализовано):** автоматический trigger из `wdt_kick` по протуханию соответствующего heartbeat'а. Идея: HB starve → попробовать local recovery → если через N попыток не помогло → escalate до PS reset.
+
+Сейчас все recovery — ручные, через UDP-команды. После того как они валидированы в полевых условиях (не ломают связь, не теряют трафик), можно подключать к watchdog'у автоматику.
+
+---
+
 ## Диагностика
 
 ### Команда не работает / reset не происходит

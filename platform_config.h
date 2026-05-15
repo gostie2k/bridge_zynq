@@ -22,9 +22,9 @@
 
 
 #define BRIDGE 1
-//#define IS_MASTER 1
+#define IS_MASTER 1
 //#define IS_OLD_PAR 1
-#define IS_SLAVE 1
+//#define IS_SLAVE 1
 
 #define IS_ANTSDR
 //#define IS_MAKET_PKRV

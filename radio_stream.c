@@ -680,6 +680,37 @@ void radio_stream_reset_rx_ids(void) {
     rx_first_pkt_seen   = 0;
 }
 
+/* ===================================================================
+ *  Recovery handlers
+ *  ------------------------------------------------------------------
+ *  Локальный "soft restart" одной из сторон radio path без PS reset.
+ *  Чистит:
+ *    - соответствующую сторону AXI FIFO (TX или RX)
+ *    - software state (ring, parser state, counters)
+ *  Stats-счётчики ошибок НЕ обнуляются — они нужны для диагностики
+ *  частоты срабатываний recovery.
+ * =================================================================== */
+void radio_recover_tx(void) {
+    XLlFifo_TxReset(&fifo);
+    tx_head = tx_tail = tx_count = 0;
+    global_tx_pkt_counter = 0;
+    global_tx_seq_counter = 0;
+    xil_printf("[RECOV] radio_tx: FIFO TX reset + ring/counters cleared\r\n");
+}
+
+void radio_recover_rx(void) {
+    XLlFifo_RxReset(&fifo);
+    rx_head = rx_tail = rx_count = 0;
+    rx_state = ST_MAGIC_H;
+    rx_pkt_len = 0;
+    rx_pkt_received = 0;
+    rx_calc_crc = 0;
+    rx_recv_crc = 0;
+    rx_first_block_seen = 0;
+    rx_first_pkt_seen = 0;
+    xil_printf("[RECOV] radio_rx: FIFO RX reset + parser state cleared\r\n");
+}
+
 void radio_stream_set_loopback(int enable) {    loopback_enabled = enable;
     xil_printf("[RADIO] Loopback %s\r\n", enable ? "ENABLED" : "DISABLED");
 }

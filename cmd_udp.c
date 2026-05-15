@@ -10,6 +10,7 @@
 #include "modem.h"
 #include "firewall.h"
 #include "watchdog.h"
+#include "bridge_func.h"
 #include "lwip/pbuf.h"
 #include "lwip/udp.h"
 #include "lwip/ip_addr.h"
@@ -592,6 +593,63 @@ static void handle_proto_0x90(struct udp_pcb *upcb, uint8_t *data,
         LOG1("[CMD 0x42] direct SLCR soft reset\r\n");
         wdt_force_reset_now();
         /* unreachable */
+        break;
+    }
+
+    /* ─── Recovery handlers (manual trigger, без PS reset) ──────────────
+     * 0x43 — recover lwIP (cleanup dynamic FDB)
+     * 0x44 — recover radio TX (FIFO TX reset + ring/counters)
+     * 0x45 — recover radio RX (FIFO RX reset + parser state)
+     * Все требуют magic byte 0x52 (= 'R') в payload[2] чтобы не дёрнуть
+     * случайно. Ответ: [0x90][sub][status] где status:
+     *   0x00 — bad magic
+     *   0x01 — выполнено
+     */
+    case 0x43: {  /* Recover lwIP */
+        if (len < 3 || data[2] != 0x52) {
+            LOG1("[CMD 0x43] bad magic\r\n");
+            struct pbuf *pb = resp_alloc(0x43, 3);
+            if (pb) { ((uint8_t *)pb->payload)[2] = 0x00; resp_send(upcb, pb, addr, port); }
+            break;
+        }
+        u16_t cleared = bridge_recover_lwip();
+        struct pbuf *pb = resp_alloc(0x43, 5);
+        if (pb) {
+            uint8_t *d = (uint8_t *)pb->payload;
+            d[2] = 0x01;
+            d[3] = (uint8_t)(cleared & 0xFF);
+            d[4] = (uint8_t)((cleared >> 8) & 0xFF);
+            resp_send(upcb, pb, addr, port);
+        }
+        LOG1("[CMD 0x43] lwip recovery: %u FDB entries cleared\r\n", (unsigned)cleared);
+        break;
+    }
+
+    case 0x44: {  /* Recover radio TX */
+        if (len < 3 || data[2] != 0x52) {
+            LOG1("[CMD 0x44] bad magic\r\n");
+            struct pbuf *pb = resp_alloc(0x44, 3);
+            if (pb) { ((uint8_t *)pb->payload)[2] = 0x00; resp_send(upcb, pb, addr, port); }
+            break;
+        }
+        radio_recover_tx();
+        struct pbuf *pb = resp_alloc(0x44, 3);
+        if (pb) { ((uint8_t *)pb->payload)[2] = 0x01; resp_send(upcb, pb, addr, port); }
+        LOG1("[CMD 0x44] radio TX recovery done\r\n");
+        break;
+    }
+
+    case 0x45: {  /* Recover radio RX */
+        if (len < 3 || data[2] != 0x52) {
+            LOG1("[CMD 0x45] bad magic\r\n");
+            struct pbuf *pb = resp_alloc(0x45, 3);
+            if (pb) { ((uint8_t *)pb->payload)[2] = 0x00; resp_send(upcb, pb, addr, port); }
+            break;
+        }
+        radio_recover_rx();
+        struct pbuf *pb = resp_alloc(0x45, 3);
+        if (pb) { ((uint8_t *)pb->payload)[2] = 0x01; resp_send(upcb, pb, addr, port); }
+        LOG1("[CMD 0x45] radio RX recovery done\r\n");
         break;
     }
 
