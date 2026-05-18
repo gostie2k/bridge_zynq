@@ -376,6 +376,12 @@ uint32_t deb_pkt_r = 0;
 uint32_t deb_pkt_w = 0;
 uint32_t deb_pkt_buf[4096];
 void send_deb();
+
+/* IQ-стрим (debug FIFO → UDP на PC) — управляется через 0x90 0x47.
+ * По умолчанию выключен: при активном стриме модем спамит 1KB pbuf
+ * каждые ~миллисекунду, что забивает lwIP heap и приводит к WDT-ребуту.
+ * Включается явно когда PC хочет видеть созвездие. */
+volatile bool g_iq_stream_enabled = false;
 //void send_modem_status(struct stat_modem* status);
 
 /* --- from _1: new functions --- */
@@ -1838,6 +1844,7 @@ lwip_init();
     while(1)
     {
     wdt_hb_main();
+    wdt_section_mark(WDT_SEC_OTHER);   /* по умолчанию — будет переопределено ниже */
 
     	//uint32_t fifo_rx_isr = AXI_CNTRL_REG_READ(FIFO_RX_DEV_BASE_ADDR + FIFO_ISR_OFFSET, 0);
 
@@ -1954,6 +1961,7 @@ lwip_init();
     	//tx_seg_on = ((fpga_regs[12]==0x02)&&(fpga_regs[13]==0x40));
     	//rx_seg_on = ((fpga_regs[14]==0x02)&&(fpga_regs[15]==0x40));
     	//debug_ram_load(&bufff_cnt, &bufff[0], &Gpio_Ps, &Uart1_Ps);
+    	wdt_section_mark(WDT_SEC_EXEC_FUNC);
     	exec_func(&func_start, func_type, &func_par[0]);
 
 #ifdef BRIDGE
@@ -1969,14 +1977,22 @@ lwip_init();
          //}
 #endif
 
+    	wdt_section_mark(WDT_SEC_LWIP_INPUT);
     	xemacif_input(echo_netif);
+    	wdt_section_mark(WDT_SEC_POST_LWIP);   /* xemacif_input отработал */
     	wdt_hb_lwip();
 
         // Обработка таймеров (ARP, TCP, DHCP)
         //sys_check_timeouts();
 
 
+    	wdt_section_mark(WDT_SEC_FIFO_DEB);
     	fifo_deb_read();
+
+    	/* После fifo_deb_read идёт большой блок status-обработки и SPI
+    	 * операций. Сбрасываем секцию на OTHER чтобы FIFO_DEB не показывал
+    	 * ложно — следующие SPI-блоки получат свои маркеры. */
+    	wdt_section_mark(WDT_SEC_OTHER);
 
 
 
@@ -2127,7 +2143,7 @@ lwip_init();
 
 
 
-    		 printf("DEB CNT: %d  %d \n\r",  deb_cnt_br,  deb_cnt_rf);
+    		 LOG_HOT("DEB CNT: %d  %d \n\r",  deb_cnt_br,  deb_cnt_rf);
 
 
 
@@ -2139,10 +2155,12 @@ lwip_init();
 
     	XTime_GetTime(&cur_time);
 
-
-    	 if (cur_time - mem_time >= COUNTS_PER_SECOND )
-
-
+    	/* SPI-блок (температура AD9361/Zynq + rssi/gain) был раз в секунду —
+    	 * иногда залипает на >2 сек и WDT ребутит. Снижаем до раз в 5 сек.
+    	 * Если SPI на конкретном вызове "висит", мы хотя бы реже бьём по
+    	 * этой грабле. Точное место hang'а определяет crash_section после
+    	 * следующего ребута (AD9361_TEMP / XADC / SPI_RSSI). */
+    	 if (cur_time - mem_time >= (XTime)(5ULL * COUNTS_PER_SECOND) )
     	 {
     		 mem_time=cur_time;
 
@@ -2159,21 +2177,26 @@ lwip_init();
 
     		 led_tog = !led_tog;
 
+    		 /* AD9361 temperature read временно отключено — SPI engine
+    		  * периодически залипает (ребуты в crash_section=AD9361_TEMP).
+    		  * Включить обратно когда найдём правильное решение. */
+#if 0
+    		 wdt_section_mark(WDT_SEC_AD9361_TEMP);
     		 int32_t t;
     		 ad9361_get_temperature(ad9361_phy, &t);
     		 float tf = 0;
-
     		 tf = t;
     		 tf=tf/1000.;
-
     		 status_modem->TempAD9361 = tf;
-
-    		 //printf("ad9361 temp = %.1f \n\r", tf);
-    		 //xil_printf("ad9361 temp =  %d\n\r", t);
+#else
+    		 status_modem->TempAD9361 = 0.0f;
+#endif
 
     	     u32 TempRawData;
     		 float TempData;
 
+    		 /* XADC ни разу не висел в crash-логах — оставляем активным. */
+    		 wdt_section_mark(WDT_SEC_XADC);
     		 TempRawData = XSysMon_GetAdcData(XADCInstPtr, XSM_CH_TEMP);
     		 TempData    = XSysMon_RawToTemperature(TempRawData);
     		//xil_printf("Zynq Raw Temp %lu \n\r", TempRawData);
@@ -2222,26 +2245,26 @@ lwip_init();
 
     		 //temp
 
+    		  /* rssi/gain через no_os_spi_write_and_read временно отключено —
+    		   * SPI engine иногда залипает. */
+#if 0
+    		  wdt_section_mark(WDT_SEC_SPI_RSSI);
     		  uint8_t d[] = {0x01,0x61,0x00,0x00};
     		  no_os_spi_write_and_read(&desc_tmp,&d[0],1);
-
-
     		   float rssi = -d[2];
     		   rssi/=4.;
-
     		   d[0] = 0x02; d[1] = 0xb0;
     		   no_os_spi_write_and_read(&desc_tmp,&d[0],1);
-    		   //xil_printf("%02X", d[2]);
-
     		   rssi-=d[2];
-
     		   gain_index_rx = d[2];
-
     		   pow_rx = rssi + 13.9397;
-
-
-
     		   status_modem->status_rx.max_pow = pow_rx;
+#else
+    		   pow_rx = 0.0f;
+    		   gain_index_rx = 0;
+    		   status_modem->status_rx.max_pow = 0.0f;
+#endif
+    		   wdt_section_mark(WDT_SEC_OTHER);
 
     	       status_modem->status_rx.max_gain_index = gain_index_rx;
 
@@ -2260,6 +2283,7 @@ lwip_init();
 
 
 
+    	     wdt_section_mark(WDT_SEC_STATUS_SEND);
     	     send_modem_status(status_pcb, status_modem);
 
 
@@ -2326,9 +2350,14 @@ u32 RxWord;
 bool is_val = false;
 if (ReceiveLength == 256) is_val = true;
 
+/* Если IQ-стрим выключен — дренируем FIFO без записи в кольцевой буфер
+ * и без последующего send_deb. Иначе pbuf'ы от send_deb забивают lwIP
+ * heap → WDT-ребут. По умолчанию OFF, включается через 0x90 0x47. */
+const bool stream_on = g_iq_stream_enabled;
+
 for (int i=0; i < ReceiveLength; i++) {
 RxWord = XLlFifo_RxGetWord(&fifo_deb);
-if (is_val)
+if (is_val && stream_on)
 	{
 	 deb_pkt_buf[deb_pkt_w] = RxWord;
 	 deb_pkt_w=(deb_pkt_w == 4095)?0:deb_pkt_w+1;
@@ -2336,12 +2365,12 @@ if (is_val)
 }
 
 
-if (!is_val) xil_printf("! debug wrong: ReceiveLength =  %08x\n\r", ReceiveLength);
+if (!is_val) LOG_HOT("! debug wrong: ReceiveLength =  %08x\n\r", ReceiveLength);
 
 
 #ifdef IS_MASTER
 
-if (is_val) send_deb();
+if (is_val && stream_on) send_deb();
 
 #endif
 
@@ -2366,7 +2395,7 @@ void send_deb() {
 
     struct pbuf *p = pbuf_alloc(PBUF_TRANSPORT, 1024, PBUF_RAM);
     if (!p) {
-        xil_printf("Failed to allocate pbuf for deb packet\n\r");
+        LOG_HOT("Failed to allocate pbuf for deb packet\n\r");
         return;
     }
 
@@ -2392,7 +2421,7 @@ void send_deb() {
 
 
     if (out != ERR_OK) {
-        xil_printf("Error udp_sendto debug_pcb: %d\n\r", out);
+        LOG_HOT("Error udp_sendto debug_pcb: %d\n\r", out);
     }
 
 
@@ -2410,7 +2439,7 @@ void send_modem_status(struct stat_modem* status) {
 
     struct pbuf *p = pbuf_alloc(PBUF_TRANSPORT, sizeof(struct stat_modem), PBUF_RAM);
     if (!p) {
-        xil_printf("Failed to allocate pbuf for deb packet\n\r");
+        LOG_HOT("Failed to allocate pbuf for status packet\n\r");
         return;
     }
 
@@ -2423,7 +2452,7 @@ void send_modem_status(struct stat_modem* status) {
     err_t out = udp_sendto(debug_pcb, p, &RemoteAddr, RemotePortStatus);
 
     if (out != ERR_OK) {
-        xil_printf("Error udp_sendto debug_pcb: %d\n\r", out);
+        LOG_HOT("Error udp_sendto status: %d\n\r", out);
     }
 
     pbuf_free(p);
@@ -2521,9 +2550,9 @@ void fifo_rx_buf_write(struct vid_pkt* rx_buf, uint8_t* rx_wad, uint8_t* cmd_rx_
 
 
 
-		    if (!is_val) xil_printf("!is_val");
+		    if (!is_val) LOG_HOT("!is_val");
 
-		    if (RxWord != sum)	xil_printf("!sum");
+		    if (RxWord != sum)	LOG_HOT("!sum");
 
             u16 cnt_pkt = (preamb1>>16)&0x0000ffff;
 
@@ -2531,7 +2560,7 @@ void fifo_rx_buf_write(struct vid_pkt* rx_buf, uint8_t* rx_wad, uint8_t* cmd_rx_
             if (cnt_pkt == 0)	alarm = deb_cnt_pkt!=0xffff;
             else alarm  = cnt_pkt-1 != deb_cnt_pkt;
 
-           if (alarm)  xil_printf("%04X\n\r",cnt_pkt);
+           if (alarm)  LOG_HOT("%04X\n\r",cnt_pkt);
 
 		    deb_cnt_pkt = cnt_pkt;
 
@@ -2624,7 +2653,7 @@ void fifo_rx_buf_write(struct vid_pkt* rx_buf, uint8_t* rx_wad, uint8_t* cmd_rx_
 					if (!is_val)
 			{
 
-						xil_printf("!is_val %08x %08x \n\r",preamb0,preamb1);
+						LOG_HOT("!is_val %08x %08x \n\r",preamb0,preamb1);
 			            return;
 			}
 
@@ -2726,7 +2755,7 @@ return;
 							if (!is_val)
 					{
 
-								xil_printf("!p54 is_val %08x %08x \n\r",preamb0,preamb1);
+								LOG_HOT("!p54 is_val %08x %08x \n\r",preamb0,preamb1);
 					            return;
 					}
 
@@ -2832,7 +2861,7 @@ return;
 
 
 			//xil_printf("! data wrong: ReceiveLength =  %08x\n\r", ReceiveLength);
-			xil_printf("%d\n\r", ReceiveLength);
+			LOG_HOT("%d\n\r", ReceiveLength);
 
 			for (int i=0; i < ReceiveLength; i++) {
 				RxWord = XLlFifo_RxGetWord(&fifo);

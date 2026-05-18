@@ -153,54 +153,54 @@ void spi_engine_npu_com_board_init(struct no_os_spi_desc**  spi_eng)
     usleep(100);
 
     //00 -not use, 01 - output, 10- Schmitt logic input, 11 - Schmitt logic input with pullup
-    tx_buf[0] = 0x09; // Адрес регистра конфигурации портов P[7:4]
-    tx_buf[1] = 0xff; // Данные: 11 11 11 11
+    tx_buf[0] = 0x09; // пїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅ P[7:4]
+    tx_buf[1] = 0xff; // пїЅпїЅпїЅпїЅпїЅпїЅ: 11 11 11 11
     spi_engine_write_and_read(*spi_eng,(uint8_t *)&tx_buf, 2);
     usleep(100);
 
-    tx_buf[0] = 0x0A; // Адрес регистра конфигурации портов P[11:8]
-    tx_buf[1] = 0xff; // Данные: 11 11 11 11
+    tx_buf[0] = 0x0A; // пїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅ P[11:8]
+    tx_buf[1] = 0xff; // пїЅпїЅпїЅпїЅпїЅпїЅ: 11 11 11 11
     spi_engine_write_and_read(*spi_eng,(uint8_t *)&tx_buf, 2);
     usleep(100);
 
-    tx_buf[0] = 0x0B; // Адрес регистра конфигурации портов P[15:12]
-    tx_buf[1] = 0xfd; // Данные: 11 11 11 01
+    tx_buf[0] = 0x0B; // пїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅ P[15:12]
+    tx_buf[1] = 0xfd; // пїЅпїЅпїЅпїЅпїЅпїЅ: 11 11 11 01
     spi_engine_write_and_read(*spi_eng,(uint8_t *)&tx_buf, 2);
     usleep(100);
 
-    tx_buf[0] = 0x0C; // Адрес регистра конфигурации портов P[19:16]
-    tx_buf[1] = 0xff; // Данные: 11 11 11 11
+    tx_buf[0] = 0x0C; // пїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅ P[19:16]
+    tx_buf[1] = 0xff; // пїЅпїЅпїЅпїЅпїЅпїЅ: 11 11 11 11
     spi_engine_write_and_read(*spi_eng,(uint8_t *)&tx_buf, 2);
     usleep(100);
 
-    tx_buf[0] = 0x0D; // Адрес регистра конфигурации портов P[23:20]
-    tx_buf[1] = 0x57; // Данные: 01 01 01 11
+    tx_buf[0] = 0x0D; // пїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅ P[23:20]
+    tx_buf[1] = 0x57; // пїЅпїЅпїЅпїЅпїЅпїЅ: 01 01 01 11
     spi_engine_write_and_read(*spi_eng,(uint8_t *)&tx_buf, 2);
     usleep(100);
 
-    tx_buf[0] = 0x0E; // Адрес регистра конфигурации портов P[27:24]
-    tx_buf[1] = 0xD5; // Данные: 11 01 01 01
+    tx_buf[0] = 0x0E; // пїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅ P[27:24]
+    tx_buf[1] = 0xD5; // пїЅпїЅпїЅпїЅпїЅпїЅ: 11 01 01 01
     spi_engine_write_and_read(*spi_eng,(uint8_t *)&tx_buf, 2);
     usleep(100);
 
-    tx_buf[0] = 0x0F; // Адрес регистра конфигурации портов P[27:24]
-    tx_buf[1] = 0x5D; // Данные: 01 01 11 01
+    tx_buf[0] = 0x0F; // пїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅ P[27:24]
+    tx_buf[1] = 0x5D; // пїЅпїЅпїЅпїЅпїЅпїЅ: 01 01 11 01
     spi_engine_write_and_read(*spi_eng,(uint8_t *)&tx_buf, 2);
     usleep(100);
 
-    tx_buf[0] = 0x2c; // Запись портов Pх12]
-    tx_buf[1] = 0x00; // Данные:
+    tx_buf[0] = 0x2c; // пїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅ PпїЅ12]
+    tx_buf[1] = 0x00; // пїЅпїЅпїЅпїЅпїЅпїЅ:
     spi_engine_write_and_read(*spi_eng,(uint8_t *)&tx_buf, 2);
     usleep(100);
 
-    //tx_buf[0] = 0x55; // Запись портов P[28:21]
-    //tx_buf[1] = 0x00; // Данные:
+    //tx_buf[0] = 0x55; // пїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅ P[28:21]
+    //tx_buf[1] = 0x00; // пїЅпїЅпїЅпїЅпїЅпїЅ:
     //spi_engine_write_and_read(*spi_eng,(uint8_t *)&tx_buf, 2);
     //usleep(100);
 
 
-    tx_buf[0] = 0x04; // Адрес регистра конфигурации
-    tx_buf[1] = 0x01; // Данные: Shutdown Control = Normal Operation
+    tx_buf[0] = 0x04; // пїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ
+    tx_buf[1] = 0x01; // пїЅпїЅпїЅпїЅпїЅпїЅ: Shutdown Control = Normal Operation
     spi_engine_write_and_read(*spi_eng,(uint8_t *)&tx_buf, 2);
     usleep(100);
 
@@ -244,49 +244,49 @@ void spi_engine_npu_pow_board_init(struct no_os_spi_desc**  spi_eng)
     spi_engine_write_and_read(*spi_eng,(uint8_t *)&tx_buf, 2);
     usleep(100);
 
-    //00 -вход, 01 - вход с подтяжкой, 10- выход, 11 - не используется
-    tx_buf[0] = 0x09; // Адрес регистра конфигурации портов P[7:4]
-    tx_buf[1] = 0xf5; // Данные: 11 11 01 01
+    //00 -пїЅпїЅпїЅпїЅ, 01 - пїЅпїЅпїЅпїЅ пїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ, 10- пїЅпїЅпїЅпїЅпїЅ, 11 - пїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ
+    tx_buf[0] = 0x09; // пїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅ P[7:4]
+    tx_buf[1] = 0xf5; // пїЅпїЅпїЅпїЅпїЅпїЅ: 11 11 01 01
     spi_engine_write_and_read(*spi_eng,(uint8_t *)&tx_buf, 2);
     usleep(100);
 
-    tx_buf[0] = 0x0A; // Адрес регистра конфигурации портов P[11:8]
-    tx_buf[1] = 0xff; // Данные: 11 11 11 11
+    tx_buf[0] = 0x0A; // пїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅ P[11:8]
+    tx_buf[1] = 0xff; // пїЅпїЅпїЅпїЅпїЅпїЅ: 11 11 11 11
     spi_engine_write_and_read(*spi_eng,(uint8_t *)&tx_buf, 2);
     usleep(100);
 
-    tx_buf[0] = 0x0B; // Адрес регистра конфигурации портов P[15:12]
-    tx_buf[1] = 0xff; // Данные: 11 11 11 11
+    tx_buf[0] = 0x0B; // пїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅ P[15:12]
+    tx_buf[1] = 0xff; // пїЅпїЅпїЅпїЅпїЅпїЅ: 11 11 11 11
     spi_engine_write_and_read(*spi_eng,(uint8_t *)&tx_buf, 2);
     usleep(100);
 
-    tx_buf[0] = 0x0C; // Адрес регистра конфигурации портов P[19:16]
-    tx_buf[1] = 0xff; // Данные: 11 11 11 11
+    tx_buf[0] = 0x0C; // пїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅ P[19:16]
+    tx_buf[1] = 0xff; // пїЅпїЅпїЅпїЅпїЅпїЅ: 11 11 11 11
     spi_engine_write_and_read(*spi_eng,(uint8_t *)&tx_buf, 2);
     usleep(100);
 
-    tx_buf[0] = 0x0D; // Адрес регистра конфигурации портов P[23:20]
-    tx_buf[1] = 0xff; // Данные: 11 11 11 11
+    tx_buf[0] = 0x0D; // пїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅ P[23:20]
+    tx_buf[1] = 0xff; // пїЅпїЅпїЅпїЅпїЅпїЅ: 11 11 11 11
     spi_engine_write_and_read(*spi_eng,(uint8_t *)&tx_buf, 2);
     usleep(100);
 
-    tx_buf[0] = 0x0E; // Адрес регистра конфигурации портов P[27:24]
-    tx_buf[1] = 0xff; // Данные: 11 11 11 11
+    tx_buf[0] = 0x0E; // пїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅ P[27:24]
+    tx_buf[1] = 0xff; // пїЅпїЅпїЅпїЅпїЅпїЅ: 11 11 11 11
     spi_engine_write_and_read(*spi_eng,(uint8_t *)&tx_buf, 2);
     usleep(100);
 
-    tx_buf[0] = 0x0F; // Адрес регистра конфигурации портов P[27:24]
-    tx_buf[1] = 0xff; // Данные: 11 11 11 11
+    tx_buf[0] = 0x0F; // пїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅ P[27:24]
+    tx_buf[1] = 0xff; // пїЅпїЅпїЅпїЅпїЅпїЅ: 11 11 11 11
     spi_engine_write_and_read(*spi_eng,(uint8_t *)&tx_buf, 2);
     usleep(100);
 
-    tx_buf[0] = 0x40; // Запись портов P[7:4]
+    tx_buf[0] = 0x40; // пїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅ P[7:4]
     tx_buf[1] = 0x03;
     spi_engine_write_and_read(*spi_eng,(uint8_t *)&tx_buf, 2);
     usleep(100);
 
-    tx_buf[0] = 0x04; // Адрес регистра конфигурации
-    tx_buf[1] = 0x01; // Данные: Shutdown Control = Normal Operation
+    tx_buf[0] = 0x04; // пїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ
+    tx_buf[1] = 0x01; // пїЅпїЅпїЅпїЅпїЅпїЅ: Shutdown Control = Normal Operation
     spi_engine_write_and_read(*spi_eng,(uint8_t *)&tx_buf, 2);
     usleep(100);
 
@@ -303,13 +303,13 @@ void spi_engine_npu_pow_board_init(struct no_os_spi_desc**  spi_eng)
 	tx_buf[1] = 0x00;
 	spi_engine_write_and_read(spi_eng,(uint8_t *)&tx_buf, 2);
 
-	status_npu->tx_panel_1.word = tx_buf[1]; // !!!!!!!!!!!!!!! м.б. 7:0 -> 0:7
+	status_npu->tx_panel_1.word = tx_buf[1]; // !!!!!!!!!!!!!!! пїЅ.пїЅ. 7:0 -> 0:7
 
 	tx_buf[0] = 0xCD;
 	tx_buf[1] = 0x00;
 	spi_engine_write_and_read(spi_eng,(uint8_t *)&tx_buf, 2);
 
-	status_npu->tx_panel_2.word = tx_buf[1]; // !!!!!!!!!!!!!!!!!! м.б. 7:0 -> 0:7
+	status_npu->tx_panel_2.word = tx_buf[1]; // !!!!!!!!!!!!!!!!!! пїЅ.пїЅ. 7:0 -> 0:7
 
 }
 
@@ -318,42 +318,42 @@ void spi_engine_npu_pow_board_init(struct no_os_spi_desc**  spi_eng)
 {
 
    uint8_t tx_buf[2];
-   if ( com_dev ==TX_PANEL_1 ) // Питание панели передающей №1
+   if ( com_dev ==TX_PANEL_1 ) // пїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅ1
    {
 		tx_buf[0] = 0x2C;
 		tx_buf[1] = ena;
 		spi_engine_write_and_read(spi_eng,(uint8_t *)&tx_buf, 2);
    }
 
-   if ( com_dev ==TX_PANEL_2 ) // Питание панели передающей №2
+   if ( com_dev ==TX_PANEL_2 ) // пїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅ2
    {
 		tx_buf[0] = 0x35;
 		tx_buf[1] = ena;
 		spi_engine_write_and_read(spi_eng,(uint8_t *)&tx_buf, 2);
    }
 
-   if ( com_dev ==RX_PANEL_1 ) // Питание панели приемной №1
+   if ( com_dev ==RX_PANEL_1 ) // пїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅ1
    {
 		tx_buf[0] = 0x36;
 		tx_buf[1] = ena;
 		spi_engine_write_and_read(spi_eng,(uint8_t *)&tx_buf, 2);
    }
 
-   if ( com_dev ==RX_PANEL_2 ) // Питание панели приемной №2
+   if ( com_dev ==RX_PANEL_2 ) // пїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅ2
    {
 		tx_buf[0] = 0x37;
 		tx_buf[1] = ena;
 		spi_engine_write_and_read(spi_eng,(uint8_t *)&tx_buf, 2);
    }
 
-   if ( com_dev ==RX_PANEL_3 ) // Питание панели приемной №3
+   if ( com_dev ==RX_PANEL_3 ) // пїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅ3
    {
 		tx_buf[0] = 0x38;
 		tx_buf[1] = ena;
 		spi_engine_write_and_read(spi_eng,(uint8_t *)&tx_buf, 2);
    }
 
-   if ( com_dev ==RX_PANEL_4 ) // Питание панели приемной №4
+   if ( com_dev ==RX_PANEL_4 ) // пїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅ4
    {
 		tx_buf[0] = 0x39;
 		tx_buf[1] = ena;
@@ -467,21 +467,21 @@ void ppos_set_tangenta(ena_type ena)
 {
 
    uint8_t tx_buf[2];
-   if ( cntrl_type == UF_DIAP_1 ) // Включение частотного диапазона №1 ячейки фильтрации
+   if ( cntrl_type == UF_DIAP_1 ) // пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅ1 пїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ
    {
 		tx_buf[0] = 0x25;
 		tx_buf[1] = ena;
 		spi_engine_write_and_read(spi_eng,(uint8_t *)&tx_buf, 2);
    }
 
-   if ( cntrl_type == UF_PIT )    // Питание ячейки фильтрации
+   if ( cntrl_type == UF_PIT )    // пїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ
    {
 		tx_buf[0] = 0x26;
 		tx_buf[1] = ena;
 		spi_engine_write_and_read(spi_eng,(uint8_t *)&tx_buf, 2);
    }
 
-   if ( cntrl_type ==  UF_DIAP_2 ) // Включение частотного диапазона №2 ячейки фильтрации
+   if ( cntrl_type ==  UF_DIAP_2 ) // пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅ2 пїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ
    {
 		tx_buf[0] = 0x27;
 		tx_buf[1] = ena;
@@ -552,7 +552,7 @@ void ppos_set_tangenta(ena_type ena)
 	 AXI_CNTRL_REG_WRITE(AXI_CNTRL_REG_BASEADDR, 16, ppos.creg4.word);
 
 
-	 ppos.creg5.inside.slot_dur = 4000;//1000;
+	 ppos.creg5.inside.slot_dur = 1000;//1000;
 
 	 AXI_CNTRL_REG_WRITE(AXI_CNTRL_REG_BASEADDR, 20, ppos.creg5.word);
 
@@ -570,7 +570,7 @@ void ppos_set_tangenta(ena_type ena)
 	 tx_chan0.creg0.inside.code = 0;
 	 tx_chan0.creg0.inside.mod = 2;
 	 tx_chan0.creg0.inside.mux_ad9361_din = 5;
-	 tx_chan0.creg0.inside.pkt_len = 4800;//576;
+	 tx_chan0.creg0.inside.pkt_len = 576;//576;
 	 tx_chan0.creg0.inside.scr_on = 1;
 	 tx_chan0.creg0.inside.gain = 0;
 	 tx_chan0.creg0.inside.run = 0;
@@ -599,7 +599,7 @@ void ppos_set_tangenta(ena_type ena)
 	 rx_chan0.creg0.inside.bod = 2;
 	 rx_chan0.creg0.inside.code = 0;
 	 rx_chan0.creg0.inside.mod = 2;
-	 rx_chan0.creg0.inside.pkt_len = 4800;//576;
+	 rx_chan0.creg0.inside.pkt_len = 576;//576;
 	 rx_chan0.creg0.inside.scr_on = 1;
 	 rx_chan0.creg0.inside.rcos_filt_on = 1;
 	 rx_chan0.creg0.inside.rot_on = 1;

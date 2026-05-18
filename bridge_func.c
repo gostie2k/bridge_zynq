@@ -1,6 +1,7 @@
 #include "bridge_func.h"
 #include "lwip/pbuf.h"
 #include "cmd_buf.h"
+#include "cmd_udp.h"   /* для g_log_level / LOG_HOT */
 //extern struct netif udp_netif2;
 extern struct netif port1_bridge;
 //extern struct netif port2_bridge;
@@ -101,7 +102,7 @@ err_t vport2_linkoutput(struct netif *netif, struct pbuf *p) {
 	err_t out = ERR_OK;
 	out = pbuf_copy(pp, p);
 
-	if (DEB_FUNC)
+	if (g_log_level >= 3)
 	{
 	       struct eth_hdr *ethhdr = (struct eth_hdr*)p->payload;
 	        xil_printf("[port2_bridge] ethernet_input: dest:%02X:%02X:%02X:%02X:%02X:%02X, src:%02X:%02X:%02X:%02X:%02X:%02X, type:%04X  len: %4d  \n\r",
@@ -162,8 +163,8 @@ err_t vport3_linkoutput(struct netif *netif, struct pbuf *p) {
 	 struct eth_hdr *ethhdr = (struct eth_hdr*)p->payload;
      err_t out = ERR_OK;
 
-     // ===== DBG #1 =====
-     	{
+     // ===== DBG #1 (только при log_level >= 3, hot-path) =====
+     	if (g_log_level >= 3) {
      		static int n1 = 0;
      		if (p->tot_len > 1000 && (n1++ % 50) == 0) {
      			uint8_t *d = (uint8_t*)p->payload;
@@ -176,7 +177,7 @@ err_t vport3_linkoutput(struct netif *netif, struct pbuf *p) {
      	}
      	// ===== END =====
 
-	if (DEB_FUNC)
+	if (g_log_level >= 3)
 	{
 	       //struct eth_hdr *ethhdr = (struct eth_hdr*)p->payload;
 	        xil_printf("vport3_linkoutput: dest:%02X:%02X:%02X:%02X:%02X:%02X, src:%02X:%02X:%02X:%02X:%02X:%02X, type:%04X  tot_len: %4d len: %4d \n\r",
@@ -269,7 +270,7 @@ err_t udpif2_init(struct netif *netif) {
 
 err_t udpif2_linkoutput(struct netif *netif, struct pbuf *p) {
 
-	if (DEB_FUNC)
+	if (g_log_level >= 3)
 	{
        struct eth_hdr *ethhdr = (struct eth_hdr*)p->payload;
         xil_printf("[udp_netif2]   ethernet_input: dest:%02X:%02X:%02X:%02X:%02X:%02X, src:%02X:%02X:%02X:%02X:%02X:%02X, type:%04X  len: %4d  \n\r",
@@ -292,7 +293,7 @@ err_t eth_inp(struct pbuf *p, struct netif *netif)
 {
 //Bridge network interface
 
-	if (DEB_FUNC)
+	if (g_log_level >= 3)
 	{
 	       struct eth_hdr *ethhdr = (struct eth_hdr*)p->payload;
 	        xil_printf("[bridge_netif] ethernet_input: dest:%02X:%02X:%02X:%02X:%02X:%02X, src:%02X:%02X:%02X:%02X:%02X:%02X, type:%04X  len: %4d  \n\r",

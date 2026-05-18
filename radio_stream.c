@@ -6,6 +6,7 @@
 #include <stdbool.h>
 #include "modem.h"
 #include "watchdog.h"
+#include "cmd_udp.h"   /* для g_log_level / LOG_HOT */
 
 extern struct netif port3_bridge;
 
@@ -220,7 +221,7 @@ if (ReceiveLength==54)
 
 	else
 		{
-			xil_printf("fifo_rx_len=%d\n\r", ReceiveLength);
+			LOG_HOT("fifo_rx_len=%d\n\r", ReceiveLength);
 			for (int i=0; i < ReceiveLength; i++)  RxWord = XLlFifo_RxGetWord(&fifo);
 		}
 
@@ -362,6 +363,11 @@ void tx_process() {
 
 
 err_t radio_linkoutput(struct netif *netif, struct pbuf *p) {
+
+    /* Сюда попадаем по цепочке xemacif_input → bridgeif → vport3_linkoutput.
+     * Если main loop здесь подвиснет — crash_section покажет RADIO_TX вместо
+     * расплывчатого LWIP_INPUT. */
+    wdt_section_mark(WDT_SEC_RADIO_TX);
 
     if ((RING_SIZE - tx_count) < (p->tot_len + 10)) {
         dbg_err_tx_reject++;

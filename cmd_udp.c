@@ -521,17 +521,21 @@ static void handle_proto_0x90(struct udp_pcb *upcb, uint8_t *data,
 
     case 0x40: {  /* Read watchdog stats
                    * Response payload after [0x90][0x40]:
-                   *   [2..5]  reboot_status (SLCR)
-                   *   [6]     wdt_reset_flag (0/1)
-                   *   [7]     reserved
-                   *   [8..11] kick_count
+                   *   [2..5]   reboot_status (SLCR)
+                   *   [6]      wdt_reset_flag (0/1)
+                   *   [7]      reserved
+                   *   [8..11]  kick_count
                    *   [12..15] starve_count
                    *   [16..19] last_starve_mask
                    *   [20..23] uptime_sec
+                   *   [24]     crash_section (wdt_section_t)
+                   *   [25]     crash_oldest_hb (0=MAIN 1=LWIP 2=TX 3=RX 0xF=none)
+                   *   [26]     crash_starve_mask
+                   *   [27]     crash_valid (1 если crash-info прочиталась)
                    */
         wdt_stats_t st;
         wdt_get_stats(&st);
-        struct pbuf *pb = resp_alloc(0x40, 24);
+        struct pbuf *pb = resp_alloc(0x40, 28);
         if (!pb) break;
         uint8_t *d = (uint8_t *)pb->payload;
         put_le32(d + 2,  st.reboot_status);
@@ -541,10 +545,18 @@ static void handle_proto_0x90(struct udp_pcb *upcb, uint8_t *data,
         put_le32(d + 12, st.starve_count);
         put_le32(d + 16, st.last_starve_mask);
         put_le32(d + 20, st.uptime_sec);
+        d[24] = st.crash_section;
+        d[25] = st.crash_oldest_hb;
+        d[26] = st.crash_starve_mask;
+        d[27] = st.crash_valid;
         resp_send(upcb, pb, addr, port);
-        LOG1("[CMD 0x40] WDT stats: uptime=%lu kick=%lu starve=%lu mask=0x%02X\r\n",
+        LOG1("[CMD 0x40] WDT stats: uptime=%lu kick=%lu starve=%lu mask=0x%02X crash{sect=%s oldest=%u mask=0x%X valid=%u}\r\n",
              st.uptime_sec, st.kick_count, st.starve_count,
-             (unsigned)st.last_starve_mask);
+             (unsigned)st.last_starve_mask,
+             wdt_section_name(st.crash_section),
+             (unsigned)st.crash_oldest_hb,
+             (unsigned)st.crash_starve_mask,
+             (unsigned)st.crash_valid);
         break;
     }
 
@@ -628,6 +640,24 @@ static void handle_proto_0x90(struct udp_pcb *upcb, uint8_t *data,
         struct pbuf *pb = resp_alloc(0x45, 3);
         if (pb) { ((uint8_t *)pb->payload)[2] = 0x01; resp_send(upcb, pb, addr, port); }
         LOG1("[CMD 0x45] radio RX recovery done\r\n");
+        break;
+    }
+
+    /* Get/Set IQ-stream enable (debug FIFO → UDP на PC).
+     *   Request len=2: GET — ответ [0x90][0x47][state]
+     *   Request len=3: SET — payload[2] = 0/1, ответ тот же.
+     * По умолчанию OFF — иначе spam забивает pbuf pool и WDT-ребутит. */
+    case 0x47: {
+        extern volatile bool g_iq_stream_enabled;
+        if (len >= 3) {
+            g_iq_stream_enabled = (data[2] != 0);
+            xil_printf("[IQ] stream %s\r\n", g_iq_stream_enabled ? "ENABLED" : "disabled");
+        }
+        struct pbuf *pb = resp_alloc(0x47, 3);
+        if (pb) {
+            ((uint8_t *)pb->payload)[2] = g_iq_stream_enabled ? 1 : 0;
+            resp_send(upcb, pb, addr, port);
+        }
         break;
     }
 

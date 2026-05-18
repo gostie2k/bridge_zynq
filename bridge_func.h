@@ -31,7 +31,8 @@
 #ifndef BRIDGE_FUNC_H_
 #define BRIDGE_FUNC_H_
 
-#define DEB_FUNC  0
+/* DEB_FUNC удалён — отладка ethernet-трафика теперь runtime через
+ * g_log_level >= 3 (см. cmd_udp.h). Включается командой 0x90 0x46. */
 
 #ifdef IS_MASTER
 static const bridgeif_initdata_t bridge_data =

@@ -24,6 +24,8 @@ void wdt_hb_rx(void) {}
 void wdt_get_stats(wdt_stats_t *out) { if (out) { __builtin_memset(out, 0, sizeof(*out)); } }
 void wdt_simulate_hang(void) { for(;;) __asm__ volatile("nop"); }
 void wdt_force_reset_now(void) { for(;;) __asm__ volatile("nop"); }
+void wdt_section_mark(wdt_section_t s) { (void)s; }
+const char *wdt_section_name(uint8_t s) { (void)s; return "?"; }
 #else
 
 /* ===================================================================
@@ -64,8 +66,26 @@ void wdt_force_reset_now(void) { for(;;) __asm__ volatile("nop"); }
 
 /* Магический флаг в scratch-битах [15:0] REBOOT_STATUS — выставляется ISR'ом
  * перед SLCR soft reset, чтобы после перезагрузки отличить "ресет от WDT"
- * от обычного soft reset.  Bit 4 не используется FSBL Xilinx'а. */
+ * от обычного soft reset.  Bit 4 не используется FSBL Xilinx'а.
+ *
+ * Дополнительная crash-info упакована в scratch-биты:
+ *   bit  4       — WDT_MAGIC (всегда 1 если crash через наш ISR)
+ *   bits 3..0    — starve_mask на момент crash'а (HB_MAIN/LWIP/TX/RX)
+ *   bits 11..8   — последняя секция main loop (wdt_section_t, 0..15)
+ *   bits 15..12  — индекс старейшего HB при crash'е (0..3, 0xF=нет данных)
+ *   bits 7..5    — reserved
+ *
+ * После reboot wdt_capture_reboot_status() декодирует это в g_stats_crash_*.
+ * Биты scratch'а scratch'ются FSBL'ом не всегда — на Xilinx Zynq FSBL
+ * сохраняет [15:0] (он использует только биты [23:16] для своих причин).
+ */
 #define SLCR_WDT_MAGIC_BIT     (1u << 4)
+#define SLCR_CRASH_STARVE_MASK 0x0000000Fu  /* bits 3..0 */
+#define SLCR_CRASH_SECTION_SHIFT  8u
+#define SLCR_CRASH_SECTION_MASK   0x00000F00u
+#define SLCR_CRASH_OLDEST_SHIFT   12u
+#define SLCR_CRASH_OLDEST_MASK    0x0000F000u
+#define SLCR_CRASH_INFO_BITS      (SLCR_CRASH_STARVE_MASK | SLCR_CRASH_SECTION_MASK | SLCR_CRASH_OLDEST_MASK | SLCR_WDT_MAGIC_BIT)
 
 /* ===================================================================
  *  XScuWdt config
@@ -114,11 +134,24 @@ static void wdt_uart_flush(void)
     }
 }
 
-/* Триггер полного PS soft reset через SLCR.PSS_RST_CTRL.
- *
- * Используется из ISR при таймауте WDT и из wdt_force_reset_now().
- * Перед записью в SLCR ждём UART flush, чтобы предыдущий лог дошёл
- * до терминала. */
+/* Запись crash-info в SLCR scratch перед reset'ом. Распаковывается после
+ * reboot в wdt_capture_reboot_status. */
+static void wdt_write_crash_to_slcr(uint8_t section, uint8_t oldest_hb, uint8_t starve_mask)
+{
+    uint32_t crash_bits = SLCR_WDT_MAGIC_BIT
+                        | ((uint32_t)(starve_mask & 0xFu))
+                        | (((uint32_t)section & 0xFu)   << SLCR_CRASH_SECTION_SHIFT)
+                        | (((uint32_t)oldest_hb & 0xFu) << SLCR_CRASH_OLDEST_SHIFT);
+
+    Xil_Out32(SLCR_BASE + SLCR_UNLOCK_OFFSET, SLCR_UNLOCK_KEY);
+    uint32_t rs = Xil_In32(SLCR_BASE + SLCR_REBOOT_STATUS_OFF);
+    rs = (rs & ~SLCR_CRASH_INFO_BITS) | crash_bits;
+    Xil_Out32(SLCR_BASE + SLCR_REBOOT_STATUS_OFF, rs);
+    /* SLCR оставляем разблокированным — следом будет write в PSS_RST_CTRL. */
+}
+
+/* Триггер полного PS soft reset через SLCR.PSS_RST_CTRL. SLCR scratch
+ * с crash-info должен быть записан перед вызовом — wdt_write_crash_to_slcr(). */
 static void wdt_trigger_soft_reset(void)  __attribute__((noreturn));
 static void wdt_trigger_soft_reset(void)
 {
@@ -128,17 +161,11 @@ static void wdt_trigger_soft_reset(void)
     /* Дожидаемся пока последняя строка вылетит из UART TX FIFO */
     wdt_uart_flush();
 
-    /* Разблокируем SLCR */
+    /* SLCR может быть уже разблокирован (после wdt_write_crash_to_slcr),
+     * но повторный unlock безопасен. */
     Xil_Out32(SLCR_BASE + SLCR_UNLOCK_OFFSET, SLCR_UNLOCK_KEY);
 
-    /* Ставим magic-флаг в scratch-биты REBOOT_STATUS, чтобы после
-     * перезагрузки опознать причину как WDT — SLC_RST в одиночку не
-     * отличает WDT-инициированный reset от обычного soft reset. */
-    uint32_t rs = Xil_In32(SLCR_BASE + SLCR_REBOOT_STATUS_OFF);
-    Xil_Out32(SLCR_BASE + SLCR_REBOOT_STATUS_OFF, rs | SLCR_WDT_MAGIC_BIT);
-
-    /* Запускаем soft reset PS — после этого CPU перезапустится с начала
-     * (FSBL re-run), DDR/PLL/peripherals переинициализируются. */
+    /* Запускаем soft reset PS — FSBL re-run, peripherals reinit. */
     Xil_Out32(SLCR_BASE + SLCR_PSS_RST_CTRL_OFF, SLCR_SOFT_RST_BIT);
     __asm__ volatile("dsb sy");
 
@@ -147,9 +174,61 @@ static void wdt_trigger_soft_reset(void)
 }
 
 /* ISR: вызывается при истечении WDT counter.
+ *
+ * Снимает crash-snapshot:
+ *   - текущая main_section
+ *   - возраст каждого HB
+ *   - какой HB старее всех (главный подозреваемый)
+ *   - bitmask тех HB которые протухли (превысили свой *_MAX_MS)
+ * Печатает кратко в UART (best-effort — flush'нется в trigger_soft_reset
+ * перед сбросом) и пакует в SLCR scratch для извлечения после reboot.
+ *
  * NB: вход в ISR требует чтобы в CPSR были разрешены IRQ — если основной
  * код заблокировал прерывания, ISR не отработает. В этом случае remedy
  * нет (нужен системный WDT). */
+
+/* Heartbeat'ы и section-marker нужны ISR'у — определения нужно дать до
+ * ISR'а. Один writer на каждый heartbeat → volatile store без блокировок. */
+static volatile XTime g_hb_main = 0;
+static volatile XTime g_hb_lwip = 0;
+static volatile XTime g_hb_tx   = 0;
+static volatile XTime g_hb_rx   = 0;
+
+/* Текущая секция main loop — пишется через wdt_section_mark(), читается в ISR. */
+static volatile uint8_t g_main_section = WDT_SEC_NONE;
+
+void wdt_section_mark(wdt_section_t s) { g_main_section = (uint8_t)s; }
+
+const char *wdt_section_name(uint8_t s) {
+    switch (s) {
+    case WDT_SEC_NONE:        return "NONE";
+    case WDT_SEC_LWIP_INPUT:  return "LWIP_INPUT";
+    case WDT_SEC_LWIP_TMR:    return "LWIP_TMR";
+    case WDT_SEC_FIFO_DEB:    return "FIFO_DEB";
+    case WDT_SEC_RADIO_POLL:  return "RADIO_POLL";
+    case WDT_SEC_STATUS_SEND: return "STATUS_SEND";
+    case WDT_SEC_EXEC_FUNC:   return "EXEC_FUNC";
+    case WDT_SEC_AD9361_SPI:  return "AD9361_SPI";
+    case WDT_SEC_VID_SEND:    return "VID_SEND";
+    case WDT_SEC_OTHER:       return "OTHER";
+    case WDT_SEC_AD9361_TEMP: return "AD9361_TEMP";
+    case WDT_SEC_XADC:        return "XADC";
+    case WDT_SEC_SPI_RSSI:    return "SPI_RSSI";
+    case WDT_SEC_RADIO_TX:    return "RADIO_TX";
+    case WDT_SEC_POST_LWIP:   return "POST_LWIP";
+    default:                  return "?";
+    }
+}
+
+/* COUNTS_PER_SECOND из xtime_l.h = CPU_FREQ/2. ticks_per_ms = COUNTS_PER_SECOND/1000.
+ * Helper нужен ISR'у — определяем до ISR'а. */
+static inline uint64_t ms_to_ticks(uint32_t ms) {
+    return ((uint64_t)COUNTS_PER_SECOND * (uint64_t)ms) / 1000ULL;
+}
+static inline uint32_t ticks_to_ms(uint64_t ticks) {
+    return (uint32_t)(ticks / (COUNTS_PER_SECOND / 1000ULL));
+}
+
 static void wdt_isr(void *arg)
 {
     XScuWdt *wdt = (XScuWdt *)arg;
@@ -159,9 +238,51 @@ static void wdt_isr(void *arg)
                      XSCUWDT_ISR_OFFSET,
                      XSCUWDT_ISR_EVENT_FLAG_MASK);
 
-    /* Логируем последний вздох (xil_printf может не дойти до конца если
-     * UART FIFO не успеет — но это лучше чем ничего) */
-    xil_printf("\r\n[WDT] TIMEOUT — triggering full PS soft reset\r\n");
+    /* --- Снимаем snapshot heartbeat'ов --- */
+    XTime now;
+    XTime_GetTime(&now);
+
+    /* Возрасты в мс. Порядок 0=MAIN 1=LWIP 2=TX 3=RX. */
+    uint32_t hb_age_ms[4];
+    hb_age_ms[0] = ticks_to_ms((uint64_t)(now - g_hb_main));
+    hb_age_ms[1] = ticks_to_ms((uint64_t)(now - g_hb_lwip));
+    hb_age_ms[2] = ticks_to_ms((uint64_t)(now - g_hb_tx));
+    hb_age_ms[3] = ticks_to_ms((uint64_t)(now - g_hb_rx));
+
+    uint32_t starve_mask = 0;
+    if (hb_age_ms[0] > WDT_HB_MAIN_MAX_MS) starve_mask |= WDT_HB_BIT_MAIN;
+    if (hb_age_ms[1] > WDT_HB_LWIP_MAX_MS) starve_mask |= WDT_HB_BIT_LWIP;
+    if (hb_age_ms[2] > WDT_HB_TX_MAX_MS  ) starve_mask |= WDT_HB_BIT_TX;
+    if (hb_age_ms[3] > WDT_HB_RX_MAX_MS  ) starve_mask |= WDT_HB_BIT_RX;
+
+    /* Старейший HB — независимо от того, протух он формально или нет. */
+    uint8_t oldest_idx = 0;
+    uint32_t oldest_age = hb_age_ms[0];
+    for (int i = 1; i < 4; i++) {
+        if (hb_age_ms[i] > oldest_age) {
+            oldest_age = hb_age_ms[i];
+            oldest_idx = (uint8_t)i;
+        }
+    }
+
+    uint8_t section = g_main_section;
+    if (section >= WDT_SEC_MAX) section = WDT_SEC_OTHER;
+
+    static const char *hb_names[4] = { "MAIN", "LWIP", "TX", "RX" };
+
+    /* Логируем кратко. xil_printf тут не быстрый, но wdt_uart_flush в
+     * trigger_soft_reset подождёт пока всё долетит. */
+    xil_printf("\r\n[WDT] TIMEOUT  sect=%s  oldest=%s age=%lums  starve=0x%X\r\n",
+               wdt_section_name(section),
+               hb_names[oldest_idx],
+               (unsigned long)oldest_age,
+               (unsigned)starve_mask);
+    xil_printf("[WDT] HB ages: MAIN=%lu LWIP=%lu TX=%lu RX=%lu (ms)\r\n",
+               (unsigned long)hb_age_ms[0], (unsigned long)hb_age_ms[1],
+               (unsigned long)hb_age_ms[2], (unsigned long)hb_age_ms[3]);
+
+    /* Упаковываем в SLCR scratch, читается после reboot. */
+    wdt_write_crash_to_slcr(section, oldest_idx, (uint8_t)starve_mask);
 
     wdt_trigger_soft_reset();
 }
@@ -173,25 +294,14 @@ static volatile uint32_t g_stats_starve_count = 0;
 static volatile uint32_t g_stats_last_starve_mask = 0;
 static XTime             g_start_time = 0;
 
-/* ===================================================================
- *  Heartbeat timestamps (XTime ticks)
- *  ------------------------------------------------------------------
- *  Один writer на каждый heartbeat → volatile store без блокировок.
- * =================================================================== */
-static volatile XTime g_hb_main = 0;
-static volatile XTime g_hb_lwip = 0;
-static volatile XTime g_hb_tx   = 0;
-static volatile XTime g_hb_rx   = 0;
+/* Crash-info извлечённая из SLCR scratch после reboot. valid=0 пока
+ * wdt_capture_reboot_status() не прочитала или если magic-флаг не стоял. */
+static volatile uint8_t  g_stats_crash_section     = 0;
+static volatile uint8_t  g_stats_crash_oldest_hb   = 0;
+static volatile uint8_t  g_stats_crash_starve_mask = 0;
+static volatile uint8_t  g_stats_crash_valid       = 0;
 
-/* COUNTS_PER_SECOND из xtime_l.h = CPU_FREQ/2.
- * ticks_per_ms = COUNTS_PER_SECOND / 1000 */
-static inline uint64_t ms_to_ticks(uint32_t ms) {
-    return ((uint64_t)COUNTS_PER_SECOND * (uint64_t)ms) / 1000ULL;
-}
-
-static inline uint32_t ticks_to_ms(uint64_t ticks) {
-    return (uint32_t)(ticks / (COUNTS_PER_SECOND / 1000ULL));
-}
+/* Heartbeat'ы, section, ticks_to_ms — определены выше (перед ISR'ом). */
 
 /* ===================================================================
  *  REBOOT_STATUS
@@ -211,18 +321,39 @@ void wdt_capture_reboot_status(void)
     int hw_bits = (st & (SLCR_BIT_AWDT0_RST | SLCR_BIT_SWDT_RST)) ? 1 : 0;
     g_stats_wdt_reset_flag = (magic || hw_bits) ? 1 : 0;
 
-    /* Очищаем биты причины [22:16] + наш магический флаг, чтобы следующий
-     * ресет имел корректную причину. Биты "sticky" в SLCR — пишем 0 после
-     * unlock'а. Остальные scratch-биты не трогаем. */
+    /* Извлекаем crash-info из scratch-битов если magic стоит. */
+    if (magic) {
+        g_stats_crash_section     = (uint8_t)((st & SLCR_CRASH_SECTION_MASK) >> SLCR_CRASH_SECTION_SHIFT);
+        g_stats_crash_oldest_hb   = (uint8_t)((st & SLCR_CRASH_OLDEST_MASK)  >> SLCR_CRASH_OLDEST_SHIFT);
+        g_stats_crash_starve_mask = (uint8_t)(st & SLCR_CRASH_STARVE_MASK);
+        g_stats_crash_valid       = 1;
+    } else {
+        g_stats_crash_section     = WDT_SEC_NONE;
+        g_stats_crash_oldest_hb   = 0xF;
+        g_stats_crash_starve_mask = 0;
+        g_stats_crash_valid       = 0;
+    }
+
+    /* Очищаем биты причины [22:16] + наш магический флаг + crash-info, чтобы
+     * следующий ресет имел корректную причину. Биты "sticky" — пишем 0
+     * после unlock'а. */
     Xil_Out32(SLCR_BASE + SLCR_UNLOCK_OFFSET, SLCR_UNLOCK_KEY);
     Xil_Out32(SLCR_BASE + SLCR_REBOOT_STATUS_OFF,
-              st & ~(SLCR_REASON_MASK | SLCR_WDT_MAGIC_BIT));
+              st & ~(SLCR_REASON_MASK | SLCR_CRASH_INFO_BITS));
     Xil_Out32(SLCR_BASE + SLCR_LOCK_OFFSET, SLCR_LOCK_KEY);
 
-    xil_printf("[WDT] REBOOT_STATUS=0x%08X%s%s\r\n",
-               st,
-               magic ? " (WDT MAGIC)" : "",
-               hw_bits ? " (AWDT/SWDT HW bit)" : "");
+    if (g_stats_crash_valid) {
+        static const char *hb_names[5] = { "MAIN", "LWIP", "TX", "RX", "?" };
+        uint8_t oh = g_stats_crash_oldest_hb < 4 ? g_stats_crash_oldest_hb : 4;
+        xil_printf("[WDT] REBOOT_STATUS=0x%08X (WDT MAGIC)  sect=%s  oldest=%s  starve=0x%X\r\n",
+                   st,
+                   wdt_section_name(g_stats_crash_section),
+                   hb_names[oh],
+                   (unsigned)g_stats_crash_starve_mask);
+    } else {
+        xil_printf("[WDT] REBOOT_STATUS=0x%08X%s\r\n",
+                   st, hw_bits ? " (AWDT/SWDT HW bit, no crash-info)" : "");
+    }
 }
 
 /* ===================================================================
@@ -383,11 +514,15 @@ void wdt_hb_rx  (void) { XTime t; XTime_GetTime(&t); g_hb_rx   = t; }
 void wdt_get_stats(wdt_stats_t *out)
 {
     if (!out) return;
-    out->reboot_status    = g_stats_reboot_status;
-    out->wdt_reset_flag   = g_stats_wdt_reset_flag;
-    out->kick_count       = g_stats_kick_count;
-    out->starve_count     = g_stats_starve_count;
-    out->last_starve_mask = g_stats_last_starve_mask;
+    out->reboot_status     = g_stats_reboot_status;
+    out->wdt_reset_flag    = g_stats_wdt_reset_flag;
+    out->kick_count        = g_stats_kick_count;
+    out->starve_count      = g_stats_starve_count;
+    out->last_starve_mask  = g_stats_last_starve_mask;
+    out->crash_section     = g_stats_crash_section;
+    out->crash_oldest_hb   = g_stats_crash_oldest_hb;
+    out->crash_starve_mask = g_stats_crash_starve_mask;
+    out->crash_valid       = g_stats_crash_valid;
 
     XTime now;
     XTime_GetTime(&now);
@@ -477,10 +612,12 @@ void wdt_simulate_hang(void)
 #endif
 }
 
-/* Прямой триггер soft reset, минуя ISR/WDT. */
+/* Прямой триггер soft reset, минуя ISR/WDT. Ставит magic-флаг без crash-info
+ * (section=NONE, oldest_hb=0xF=нет данных, starve_mask=0). */
 void wdt_force_reset_now(void)
 {
     xil_printf("[WDT] force_reset_now — triggering SLCR.PSS_RST_CTRL directly\r\n");
+    wdt_write_crash_to_slcr(WDT_SEC_NONE, 0xF, 0);
     wdt_trigger_soft_reset();
 }
 
