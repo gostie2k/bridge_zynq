@@ -1,0 +1,2 @@
+23:17:22 === stability monitor start: modems ['192.168.250.11', '192.168.250.21'], interval 5.0s, log stability_10min_1M_repeat.log ===
+23:19:01 [192.168.250.11] *** REBOOT #1 *** uptime 234→3s  section=LWIP_INPUT  oldest=TX  mask=0xF  reboot_status=0x0008211F

@@ -1,0 +1,9 @@
+23:01:22 === stability monitor start: modems ['192.168.250.11', '192.168.250.21'], interval 5.0s, log stability_10min_1M5.log ===
+23:03:04 [192.168.250.21] НЕТ ОТВЕТА (3x) — модем недоступен (ребут/завис?)
+23:03:09 [192.168.250.21] снова отвечает
+23:03:09 [192.168.250.21] *** REBOOT #1 *** uptime 146→6s  section=LWIP_INPUT  oldest=TX  mask=0xF  reboot_status=0x0008211F
+23:04:04 [192.168.250.11] *** REBOOT #1 *** uptime 217→61s  section=LWIP_INPUT  oldest=TX  mask=0xF  reboot_status=0x0008211F
+23:05:40 [192.168.250.11] *** REBOOT #2 *** uptime 313→157s  section=LWIP_INPUT  oldest=TX  mask=0xF  reboot_status=0x0008211F
+23:07:02 [192.168.250.11] *** REBOOT #3 *** uptime 394→1s  section=LWIP_INPUT  oldest=TX  mask=0x3  reboot_status=0x00082113
+23:07:08 [192.168.250.21] *** REBOOT #2 *** uptime 228→7s  section=LWIP_INPUT  oldest=TX  mask=0x3  reboot_status=0x00082113
+23:10:07 [192.168.250.21] *** REBOOT #3 *** uptime 167→0s  section=LWIP_INPUT  oldest=TX  mask=0xF  reboot_status=0x0008211F

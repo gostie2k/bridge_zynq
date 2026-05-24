@@ -1,0 +1,25 @@
+21:46:26 === stability monitor start: modems ['192.168.250.11', '192.168.250.21'], interval 5.0s, log stability_15min_2M.log ===
+21:46:32 [192.168.250.11] *** REBOOT #1 *** uptime 253→242s  section=NO_CRASH_INFO  oldest=none  mask=0x0  reboot_status=0x00400000
+21:51:55 [192.168.250.21] *** REBOOT #1 *** uptime 569→0s  section=LWIP_INPUT  oldest=TX  mask=0x7  reboot_status=0x00082117
+21:52:00 [192.168.250.11] *** REBOOT #2 *** uptime 557→5s  section=LWIP_INPUT  oldest=TX  mask=0x7  reboot_status=0x00082117
+21:52:11 [192.168.250.11] *** REBOOT #3 *** uptime 575→16s  section=LWIP_INPUT  oldest=TX  mask=0x7  reboot_status=0x00082117
+21:52:25 [192.168.250.21] НЕТ ОТВЕТА (3x) — модем недоступен (ребут/завис?)
+21:52:30 [192.168.250.11] *** REBOOT #4 *** uptime 22→0s  section=LWIP_INPUT  oldest=TX  mask=0x7  reboot_status=0x00082117
+21:52:36 [192.168.250.21] снова отвечает
+21:52:36 [192.168.250.21] *** REBOOT #2 *** uptime 11→6s  section=LWIP_INPUT  oldest=TX  mask=0x7  reboot_status=0x00082117
+21:54:01 [192.168.250.11] *** REBOOT #5 *** uptime 686→91s  section=LWIP_INPUT  oldest=TX  mask=0x7  reboot_status=0x00082117
+21:55:15 [192.168.250.21] *** REBOOT #3 *** uptime 152→0s  section=LWIP_INPUT  oldest=TX  mask=0x3  reboot_status=0x00082113
+21:55:20 [192.168.250.11] *** REBOOT #6 *** uptime 757→5s  section=LWIP_INPUT  oldest=TX  mask=0x3  reboot_status=0x00082113
+21:55:33 [192.168.250.21] НЕТ ОТВЕТА (3x) — модем недоступен (ребут/завис?)
+21:55:38 [192.168.250.21] снова отвечает
+21:55:43 [192.168.250.11] *** REBOOT #7 *** uptime 787→28s  section=LWIP_INPUT  oldest=TX  mask=0x3  reboot_status=0x00082113
+21:55:56 [192.168.250.21] НЕТ ОТВЕТА (3x) — модем недоступен (ребут/завис?)
+21:56:01 [192.168.250.21] снова отвечает
+21:56:11 [192.168.250.11] *** REBOOT #8 *** uptime 816→56s  section=LWIP_INPUT  oldest=TX  mask=0x3  reboot_status=0x00082113
+21:56:24 [192.168.250.21] НЕТ ОТВЕТА (3x) — модем недоступен (ребут/завис?)
+21:57:11 [192.168.250.21] снова отвечает
+21:57:16 [192.168.250.11] *** REBOOT #9 *** uptime 880→121s  section=LWIP_INPUT  oldest=TX  mask=0x3  reboot_status=0x00082113
+21:57:29 [192.168.250.21] НЕТ ОТВЕТА (3x) — модем недоступен (ребут/завис?)
+21:57:46 [192.168.250.21] снова отвечает
+21:58:04 [192.168.250.21] НЕТ ОТВЕТА (3x) — модем недоступен (ребут/завис?)
+22:01:33 [192.168.250.21] снова отвечает
