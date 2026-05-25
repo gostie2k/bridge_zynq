@@ -6,6 +6,7 @@
  * =================================================================== */
 
 #include "cmd_udp.h"
+#include "platform_config.h"   /* FW_ROLE_ID / FW_BUILD_STR */
 #include "radio_stream.h"
 #include "modem.h"
 #include "firewall.h"
@@ -679,6 +680,27 @@ static void handle_proto_0x90(struct udp_pcb *upcb, uint8_t *data,
             ((uint8_t *)pb->payload)[2] = (uint8_t)g_log_level;
             resp_send(upcb, pb, addr, port);
         }
+        break;
+    }
+
+    case 0x48: {  /* Firmware info: роль + версия (чтобы по eth убедиться
+                   * ЧТО и КУДА залито).
+                   * Response payload after [0x90][0x48]:
+                   *   [2]    role_id (1=MASTER, 2=SLAVE, 0=мисконфиг)
+                   *   [3]    reserved (0)
+                   *   [4..]  ASCII версия, null-terminated (FW_BUILD_STR) */
+        const char *ver = FW_BUILD_STR;
+        uint16_t vlen = (uint16_t)strlen(ver);
+        if (vlen > 200) vlen = 200;
+        struct pbuf *pb = resp_alloc(0x48, (uint16_t)(4 + vlen + 1));
+        if (!pb) break;
+        uint8_t *d = (uint8_t *)pb->payload;
+        d[2] = (uint8_t)FW_ROLE_ID;
+        d[3] = 0;
+        memcpy(d + 4, ver, vlen);
+        d[4 + vlen] = 0;
+        resp_send(upcb, pb, addr, port);
+        LOG1("[CMD 0x48] FW info: role_id=%u %s\r\n", (unsigned)FW_ROLE_ID, ver);
         break;
     }
 

@@ -45,5 +45,30 @@
 #define NPU_POW_BOARD_CS 1
 
 
+/* ===================================================================
+ *  Firmware version / role indication
+ *  ------------------------------------------------------------------
+ *  Чтобы исключить «а тот ли билд залит» — версия и роль выводятся:
+ *    - по UART баннером при старте (см. main.c после knk_init_platform);
+ *    - по Ethernet командой 0x90 0x48 (см. cmd_udp.c).
+ *  FW_VERSION бампать вручную при значимых изменениях. __DATE__/__TIME__
+ *  добавляет компилятор — меняются КАЖДУЮ сборку, удобно убедиться что
+ *  залит свежий билд. Роль выводится из IS_MASTER/IS_SLAVE автоматически. */
+#define FW_VERSION   "wdt-robust"
+
+#if defined(IS_MASTER) && !defined(IS_SLAVE)
+  #define FW_ROLE_STR "MASTER"
+  #define FW_ROLE_ID  1u
+#elif defined(IS_SLAVE) && !defined(IS_MASTER)
+  #define FW_ROLE_STR "SLAVE"
+  #define FW_ROLE_ID  2u
+#else
+  /* Ни одна или обе роли определены — это мисконфиг, явно сигналим. */
+  #define FW_ROLE_STR "ROLE?!"
+  #define FW_ROLE_ID  0u
+#endif
+
+#define FW_BUILD_STR  FW_VERSION " " FW_ROLE_STR " (" __DATE__ " " __TIME__ ")"
+
 
 #endif

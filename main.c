@@ -32,6 +32,7 @@
 #include "xllfifo_hw.h"
 
 #include "xil_printf.h"
+#include "platform_config.h"   /* FW_VERSION / FW_ROLE_* / FW_BUILD_STR */
 
 #include "vid_buf.h"
 #include "cmd_buf.h"
@@ -1223,6 +1224,14 @@ int main()
      init_platform();
 
      knk_init_platform(&Uart1_Ps, &Gpio_Ps, &ScuGic, IntrHandler);
+
+     /* Баннер версии/роли — UART уже поднят knk_init_platform. Печатаем
+      * жирно, чтобы при заливке сразу было видно ЧТО и КУДА залито. */
+     xil_printf("\r\n==================== FIRMWARE ====================\r\n");
+     xil_printf("[FW] %s\r\n", FW_BUILD_STR);
+     xil_printf("[FW] role=%s  ver=%s  built=%s %s\r\n",
+                FW_ROLE_STR, FW_VERSION, __DATE__, __TIME__);
+     xil_printf("=================================================\r\n");
 
 
 
