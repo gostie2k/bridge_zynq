@@ -17,6 +17,7 @@ int  wdt_init(struct XScuGic *gic) { (void)gic; xil_printf("[WDT] disabled (debu
 void wdt_start(void) {}
 void wdt_stop(void) {}
 void wdt_kick(void) {}
+void wdt_progress_kick(void) {}
 void wdt_hb_main(void) {}
 void wdt_hb_lwip(void) {}
 void wdt_hb_tx(void) {}
@@ -498,6 +499,26 @@ void wdt_kick(void)
             last_log = now;
         }
     }
+}
+
+void wdt_progress_kick(void)
+{
+    if (!g_wdt_started) return;
+
+    XTime now;
+    XTime_GetTime(&now);
+
+    /* Троттл: не чаще раза в WDT_PROGRESS_KICK_MS, чтобы на каждый пакет не
+     * молотить RestartWdt. last инициализируется нулём → первый вызов кикнет. */
+    static XTime last = 0;
+    if (ticks_to_ms((uint64_t)(now - last)) < WDT_PROGRESS_KICK_MS) return;
+    last = now;
+
+    /* Прогресс есть → main жив. Освежаем MAIN-heartbeat и идём через обычный
+     * wdt_kick(): он проверит включённые HB (сейчас только MAIN, теперь свежий)
+     * и перезарядит таймер. Прочие HB не проверяются → ложного starve нет. */
+    g_hb_main = now;
+    wdt_kick();
 }
 
 /* ===================================================================

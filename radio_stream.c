@@ -369,6 +369,13 @@ err_t radio_linkoutput(struct netif *netif, struct pbuf *p) {
      * расплывчатого LWIP_INPUT. */
     wdt_section_mark(WDT_SEC_RADIO_TX);
 
+    /* Робастность под перегрузкой: xemacif_input может за один вызов разгребать
+     * большой GEM-RX backlog и не возвращаться в main loop секундами, где живёт
+     * единственный wdt_kick(). Кикаем WDT прямо отсюда (троттлингом) — пока
+     * пакеты реально текут через radio path, это прогресс, а не hang. Ставим
+     * ДО drop-проверки, чтобы поток дропаемых пакетов тоже держал таймер. */
+    wdt_progress_kick();
+
     if ((RING_SIZE - tx_count) < (p->tot_len + 10)) {
         dbg_err_tx_reject++;
         return ERR_MEM;
