@@ -1225,13 +1225,7 @@ int main()
 
      knk_init_platform(&Uart1_Ps, &Gpio_Ps, &ScuGic, IntrHandler);
 
-     /* Баннер версии/роли — UART уже поднят knk_init_platform. Печатаем
-      * жирно, чтобы при заливке сразу было видно ЧТО и КУДА залито. */
-     xil_printf("\r\n==================== FIRMWARE ====================\r\n");
-     xil_printf("[FW] %s\r\n", FW_BUILD_STR);
-     xil_printf("[FW] role=%s  ver=%s  built=%s %s\r\n",
-                FW_ROLE_STR, FW_VERSION, __DATE__, __TIME__);
-     xil_printf("=================================================\r\n");
+
 
 
 
@@ -1842,6 +1836,15 @@ lwip_init();
 
     platform_enable_interrupts();
     is_run = true;
+
+    /* Баннер версии/роли — UART уже поднят knk_init_platform. Печатаем
+          * жирно, чтобы при заливке сразу было видно ЧТО и КУДА залито. */
+         xil_printf("\r\n==================== FIRMWARE ====================\r\n");
+         xil_printf("[FW] %s\r\n", FW_BUILD_STR);
+         xil_printf("[FW] role=%s  ver=%s  built=%s %s\r\n",
+                    FW_ROLE_STR, FW_VERSION, __DATE__, __TIME__);
+         xil_printf("=================================================\r\n");
+
 
     /* Запускаем watchdog последним шагом — все init'ы выполнены,
      * иначе долгий init (AD9361, FIFO reset и т.п.) может задавить таймер.
