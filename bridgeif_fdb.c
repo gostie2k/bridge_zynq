@@ -46,6 +46,7 @@
 #include "lwip/mem.h"
 #include "lwip/timeouts.h"
 #include <string.h>
+#include "watchdog.h"   /* wdt_progress_kick — робастность под перегрузкой */
 
 #define BRIDGEIF_AGE_TIMER_MS 1000
 
@@ -85,6 +86,17 @@ bridgeif_fdb_update_src(void *fdb_ptr, struct eth_addr *src_addr, u8_t port_idx)
   int i;
   bridgeif_dfdb_t *fdb = (bridgeif_dfdb_t *)fdb_ptr;
   BRIDGEIF_DECL_PROTECT(lev);
+
+  /* Робастность под перегрузкой. Эта функция вызывается на КАЖДЫЙ входящий
+   * кадр изнутри xemacif_input (GEM-RX) и radio-RX→мост. На стороне-приёмнике
+   * (master в slave→master) горячий путь — разгребание большого GEM-RX пакета
+   * именно здесь; radio_linkoutput (где стоял единственный kick) на этом пути
+   * НЕ вызывается, поэтому WDT добивал таймер при проходе >2с (crash=LWIP_INPUT,
+   * mask с MAIN). Кикаем WDT по факту прогресса обработки кадра (троттл 250мс
+   * внутри). Покрывает оба направления и оба модема; настоящий hang (кадры не
+   * текут) по-прежнему ловится. */
+  wdt_progress_kick();
+
   BRIDGEIF_READ_PROTECT(lev);
   for (i = 0; i < fdb->max_fdb_entries; i++) {
     bridgeif_dfdb_entry_t *e = &fdb->fdb[i];
