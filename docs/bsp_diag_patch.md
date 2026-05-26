@@ -72,3 +72,30 @@ WDT_SEC_GEM_INPUT/TXOUT/SENT.
 **SPI_RSSI** → виновен process_sent_bds (фикс: ограничить while(1) — N BD за вызов).
 Если crash_section = **LWIP_INPUT** (как раньше) → не process_sent_bds, итерация 2
 (маркеры в low_level_output=AD9361_TEMP / xemacpsif_input=AD9361_SPI).
+
+**РЕЗУЛЬТАТ r8 (2 фриза): crash_section=1(LWIP_INPUT), НЕ 12 → process_sent_bds ИСКЛЮЧЁН.**
+
+---
+
+## DIAG (B) r9 — маркеры в нормальном пути (итерация 2)
+
+Локализуем дальше. Маппинг (watchdog.h): 7=AD9361_SPI, 8=VID_SEND, 10=AD9361_TEMP
+(все мёртвы при текущем билде; 11=XADC и 12=SPI_RSSI заняты — 11 активен, 12=r8).
+Везде save/restore вокруг блока (extern void wdt_section_mark(int);
+extern unsigned char wdt_section_get(void); unsigned char _diag_sec;).
+
+1. **`xemacpsif.c` `low_level_output`** → mark **10** (GEM-TX). Декл после
+   `xemacpsif_s *xemacpsif = ...(xemac->state);`; `wdt_section_mark(10);` перед
+   `SYS_ARCH_PROTECT(lev);`; restore перед `return err;` (метка return_pack_dropped).
+2. **`xemacpsif.c` `xemacpsif_input`** → mark **7** (netif->input = ethernet_input/мост).
+   Декл после `SYS_ARCH_DECL_PROTECT(lev);`; вокруг `if (netif->input(p, netif)...)`:
+   `_diag_sec=wdt_section_get(); wdt_section_mark(7);` до, `wdt_section_mark(_diag_sec);` после.
+3. **`xemacpsif_dma.c` `emacps_recv_handler`** → mark **8** (RX-ISR while(1)). Декл после
+   `u32_t gigeversion;`; `wdt_section_mark(8);` перед `while(1) {`; restore после
+   закрытия while (перед `#if !NO_SYS sys_sem_signal`).
+
+**Проверка:** r9, cap off, 2.5M. crash_section на фризе:
+- **10 (AD9361_TEMP)** → low_level_output / GEM-TX;
+- **7 (AD9361_SPI)** → netif->input (ethernet_input / мост);
+- **8 (VID_SEND)** → RX-ISR emacps_recv_handler (спин в RX while(1));
+- **1 (LWIP_INPUT)** остался → в самом xemacpsif_input / low_level_input (тривиально — пересмотр).
