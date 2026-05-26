@@ -63,14 +63,16 @@
  *    r3 = + инструментация (0x49: xemacif длительность, счётчик kick)
  *    r4 = + рейт-кап radio TX (A: держим master ниже триггера лок-апа GEM-RX)
  *    r5 = кап-дефолт 1.2M→1.0M (1.2M на стенде ещё ронял master; 1.0M держит 8+ мин)
- *    r6 = DIAG (B): счётчик GEM-ошибок 0x4B (+ врезка в BSP xemacpsif_hw.c) */
-#define FW_VERSION   "wdt-robust-r6"
+ *    r6 = DIAG (B): счётчик GEM-ошибок 0x4B (+ врезка в BSP xemacpsif_hw.c)
+ *    r7 = DIAG (B): кап ВЫКЛ по дефолту, чтобы мастер свободно виснул и ловить
+ *         0x4B. ВРЕМЕННО — после фикса B вернуть RADIO_TX_CAP_BPS_DEFAULT=1000000u */
+#define FW_VERSION   "wdt-robust-r7-diag"
 
 /* A: дефолтный кап radio TX в битах/с по ethernet-данным (0 = выключен).
- * 1.0 Mbps — проверено на стенде: master стабилен 8+ мин под 2M-нагрузкой (slave
- * шедит излишек). 1.2M ещё ловил лок-ап GEM-RX мастера. Тюнится в рантайме по
- * UDP 0x90 0x4A; выше ~1.0M — риск лок-апа master (нужен фикс драйвера B). */
-#define RADIO_TX_CAP_BPS_DEFAULT  1000000u
+ * Рабочее значение — 1000000u (master стабилен 8+ мин под 2M). СЕЙЧАС 0 (выкл)
+ * для диагностики B: мастер должен свободно виснуть, чтобы ловить причину по 0x4B.
+ * Тюнится в рантайме по UDP 0x90 0x4A. ВЕРНУТЬ 1000000u после фикса B! */
+#define RADIO_TX_CAP_BPS_DEFAULT  0u
 
 #if defined(IS_MASTER) && !defined(IS_SLAVE)
   #define FW_ROLE_STR "MASTER"
