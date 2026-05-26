@@ -151,9 +151,32 @@ crash_valid=0; WDT = бит `0x10` (WDT_MAGIC) + crash_valid=1 + `section=LWIP_I
 
 ---
 
+## 8. Финал: корень мастера и стабилизация (A)
+
+Инструментация (0x90 0x49, коммит `31de3d9`) на подтверждённом билде показала:
+master падает **не от перегрузки** — завершённые проходы `xemacif_input` всегда
+≤129 мкс, `kick_calls`/main loop летят вплоть до фриза → потом **мгновенный
+тотальный фриз ~12с** (mask=0xF, все HB). В NO_SYS `xemacpsif_input` зависает в
+`low_level_input` с выключенными прерываниями (`SYS_ARCH_PROTECT`) → это **лок-ап
+GEM-RX в драйвере Zynq-7000** (известная проблема «low RX throughput when TX
+active»; воркэраунд Rx DPRAM CR#692702 уже стоит в BSP). Master-kick (`bridgeif_fdb`,
+r2) его НЕ лечит — фриз внутри одного BSP-вызова.
+
+**Стабилизация A (рейт-кап radio TX, коммиты `a5272c6` r4, `<this>` r5):**
+token-bucket в `radio_linkoutput` (`g_radio_tx_cap_bps`, тюнинг 0x90 0x4A). Держим
+поток в радио ниже триггера → master не получает поток, на котором виснет.
+**Стенд: cap=1.2M ещё ронял master; cap=1.0M — master стабилен 8+ мин под 2M**
+(slave шедит излишек, ~52k дропов). Дефолт зафиксирован в **1.0M**.
+
+**Статус: рабочая стабильность на потолке ~1.0M достигнута** (slave-overload закрыт
+kick'ом, master защищён капом). Поднять потолок выше ~1.0M = только фикс драйвера
+GEM (B: error/reset-путь `emacps_error_handler`/`low_level_input`) — открыто, риск.
+
 ## 7. Артефакты
 
-- Коммиты `debug_wdt_merged`: `bbb0a4b` (робастность slave), `160476b` (робастность
-  master), `9989983` + `a80fbea` (индикация версии/роли), `d4f3c7d` (этот отчёт).
-- Логи мониторинга: `scripts/stability_2M_masterfix_*.log` (прогон #3, итоговый),
-  `scripts/stability_2M_run2_*.log` (#2), `scripts/stability_fix_*.log` (ранние).
+- Коммиты `debug_wdt_merged`: `bbb0a4b` (kick slave), `160476b` (kick master, не
+  лечит), `31de3d9` (инструментация 0x49), `a5272c6`+`<r5>` (рейт-кап A),
+  `9989983`+`a80fbea` (индикация версии/роли), `34f2bed` (FW_VERSION/гейт флуда).
+- Логи: `scripts/stability_2M_*.log`, `scripts/master_pool_*.log` (0x20 pool),
+  поллеры 0x49/0x4A (task-output). Свип: `scripts/ceiling_sweep.sh`,
+  `ceiling_*.log` (потолок ~1.0M, master падал на 1.5M).

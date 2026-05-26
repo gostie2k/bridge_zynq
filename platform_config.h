@@ -22,9 +22,9 @@
 
 
 #define BRIDGE 1
-//#define IS_MASTER 1
+#define IS_MASTER 1
 //#define IS_OLD_PAR 1
-#define IS_SLAVE 1
+//#define IS_SLAVE 1
 
 #define IS_ANTSDR
 //#define IS_MAKET_PKRV
@@ -61,13 +61,15 @@
  *    r1 = slave-kick (radio_linkoutput)
  *    r2 = + master-kick (bridgeif_fdb_update_src)
  *    r3 = + инструментация (0x49: xemacif длительность, счётчик kick)
- *    r4 = + рейт-кап radio TX (A: держим master ниже триггера лок-апа GEM-RX) */
-#define FW_VERSION   "wdt-robust-r4"
+ *    r4 = + рейт-кап radio TX (A: держим master ниже триггера лок-апа GEM-RX)
+ *    r5 = кап-дефолт 1.2M→1.0M (1.2M на стенде ещё ронял master; 1.0M держит 8+ мин) */
+#define FW_VERSION   "wdt-robust-r5"
 
 /* A: дефолтный кап radio TX в битах/с по ethernet-данным (0 = выключен).
- * 1.2 Mbps — чуть выше доказанно-чистых ~1.0M, ниже триггера лок-апа master
- * (~1.5M). Тюнится в рантайме по UDP 0x90 0x4A; найди max-safe свипом. */
-#define RADIO_TX_CAP_BPS_DEFAULT  1200000u
+ * 1.0 Mbps — проверено на стенде: master стабилен 8+ мин под 2M-нагрузкой (slave
+ * шедит излишек). 1.2M ещё ловил лок-ап GEM-RX мастера. Тюнится в рантайме по
+ * UDP 0x90 0x4A; выше ~1.0M — риск лок-апа master (нужен фикс драйвера B). */
+#define RADIO_TX_CAP_BPS_DEFAULT  1000000u
 
 #if defined(IS_MASTER) && !defined(IS_SLAVE)
   #define FW_ROLE_STR "MASTER"
