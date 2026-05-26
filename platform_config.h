@@ -22,9 +22,9 @@
 
 
 #define BRIDGE 1
-#define IS_MASTER 1
+//#define IS_MASTER 1
 //#define IS_OLD_PAR 1
-//#define IS_SLAVE 1
+#define IS_SLAVE 1
 
 #define IS_ANTSDR
 //#define IS_MAKET_PKRV
@@ -65,8 +65,10 @@
  *    r5 = кап-дефолт 1.2M→1.0M (1.2M на стенде ещё ронял master; 1.0M держит 8+ мин)
  *    r6 = DIAG (B): счётчик GEM-ошибок 0x4B (+ врезка в BSP xemacpsif_hw.c)
  *    r7 = DIAG (B): кап ВЫКЛ по дефолту, чтобы мастер свободно виснул и ловить
- *         0x4B. ВРЕМЕННО — после фикса B вернуть RADIO_TX_CAP_BPS_DEFAULT=1000000u */
-#define FW_VERSION   "wdt-robust-r7-diag"
+ *         0x4B. ВРЕМЕННО — после фикса B вернуть RADIO_TX_CAP_BPS_DEFAULT=1000000u
+ *    r8 = DIAG (B): section-маркер в process_sent_bds (TX-done ISR) → если фриз
+ *         там, crash_section=SPI_RSSI(12). Кап по-прежнему ВЫКЛ. */
+#define FW_VERSION   "wdt-robust-r8-diag"
 
 /* A: дефолтный кап radio TX в битах/с по ethernet-данным (0 = выключен).
  * Рабочее значение — 1000000u (master стабилен 8+ мин под 2M). СЕЙЧАС 0 (выкл)

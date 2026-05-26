@@ -155,6 +155,18 @@ typedef enum {
 
 void wdt_section_mark(wdt_section_t s);
 
+/* Текущая секция (для save/restore вокруг врезок в ISR/BSP). */
+uint8_t wdt_section_get(void);
+
+/* DIAG (B, r8): репёрпоз мёртвых section-ID под локализацию фриза мастера в
+ * нормальном RX/TX-пути GEM (врезки в BSP — см. docs/bsp_diag_patch.md).
+ * Мёртвые при текущем билде (SPI off): AD9361_SPI(7), AD9361_TEMP(10), SPI_RSSI(12).
+ * XADC(11) НЕ трогать — активен. crash_section в 0x40 покажет их по ИСХОДНОМУ
+ * имени — помнить маппинг: */
+#define WDT_SEC_GEM_INPUT  WDT_SEC_AD9361_SPI    /* 7  → xemacpsif_input перед netif->input */
+#define WDT_SEC_GEM_TXOUT  WDT_SEC_AD9361_TEMP   /* 10 → low_level_output (GEM-TX) */
+#define WDT_SEC_GEM_SENT   WDT_SEC_SPI_RSSI      /* 12 → process_sent_bds (TX-done ISR) */
+
 /* Имя секции для лога/UI. */
 const char *wdt_section_name(uint8_t s);
 

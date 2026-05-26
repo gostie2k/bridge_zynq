@@ -27,6 +27,7 @@ void wdt_get_stats(wdt_stats_t *out) { if (out) { __builtin_memset(out, 0, sizeo
 void wdt_simulate_hang(void) { for(;;) __asm__ volatile("nop"); }
 void wdt_force_reset_now(void) { for(;;) __asm__ volatile("nop"); }
 void wdt_section_mark(wdt_section_t s) { (void)s; }
+uint8_t wdt_section_get(void) { return 0; }
 const char *wdt_section_name(uint8_t s) { (void)s; return "?"; }
 #else
 
@@ -200,6 +201,7 @@ static volatile XTime g_hb_rx   = 0;
 static volatile uint8_t g_main_section = WDT_SEC_NONE;
 
 void wdt_section_mark(wdt_section_t s) { g_main_section = (uint8_t)s; }
+uint8_t wdt_section_get(void) { return g_main_section; }
 
 const char *wdt_section_name(uint8_t s) {
     switch (s) {
