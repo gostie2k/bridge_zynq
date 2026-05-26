@@ -51,10 +51,16 @@
  *  Чтобы исключить «а тот ли билд залит» — версия и роль выводятся:
  *    - по UART баннером при старте (см. main.c после knk_init_platform);
  *    - по Ethernet командой 0x90 0x48 (см. cmd_udp.c).
- *  FW_VERSION бампать вручную при значимых изменениях. __DATE__/__TIME__
- *  добавляет компилятор — меняются КАЖДУЮ сборку, удобно убедиться что
- *  залит свежий билд. Роль выводится из IS_MASTER/IS_SLAVE автоматически. */
-#define FW_VERSION   "wdt-robust"
+ *  ВНИМАНИЕ: __DATE__/__TIME__ в FW_BUILD_STR отражают время компиляции
+ *  cmd_udp.c (где раскрывается макрос), а НЕ всего образа. При инкрементальной
+ *  сборке Vitis, если cmd_udp.c не менялся, таймстамп ОСТАЁТСЯ СТАРЫМ даже после
+ *  правки других файлов → по таймстампу судить о билде НЕЛЬЗЯ.
+ *  Надёжный признак — строка FW_VERSION: бампай её при КАЖДОМ значимом
+ *  изменении (смена platform_config.h форсит пересборку cmd_udp.c → 0x48 отдаёт
+ *  новую строку). Роль выводится из IS_MASTER/IS_SLAVE автоматически.
+ *    r1 = slave-kick (radio_linkoutput)
+ *    r2 = + master-kick (bridgeif_fdb_update_src) */
+#define FW_VERSION   "wdt-robust-r2"
 
 #if defined(IS_MASTER) && !defined(IS_SLAVE)
   #define FW_ROLE_STR "MASTER"

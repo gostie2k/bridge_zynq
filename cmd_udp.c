@@ -1062,7 +1062,11 @@ void send_modem_status(struct udp_pcb *upcb, struct stat_modem* status)
      err_t out = udp_sendto(upcb, p, &ppos.status_ip, ppos.status_port);
 
      if (out != ERR_OK) {
-         xil_printf("Error udp_sendto debug_pcb: %d\n\r", out);
+         /* ERR_MEM (-1) тут = lwIP без pbuf'ов под нагрузкой (backpressure
+          * GEM-TX). Раньше печаталось безусловно и флудило UART в hot-ish path
+          * (раз в ~5с, но десятки секунд подряд) — гейтим уровнем лога.
+          * Сам факт виден в 0x20: mem_err / pool_err. */
+         LOG1("Error udp_sendto status: %d\n\r", out);
      }
 
      pbuf_free(p);
