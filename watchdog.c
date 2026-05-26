@@ -18,6 +18,7 @@ void wdt_start(void) {}
 void wdt_stop(void) {}
 void wdt_kick(void) {}
 void wdt_progress_kick(void) {}
+uint32_t wdt_get_progress_kick_calls(void) { return 0; }
 void wdt_hb_main(void) {}
 void wdt_hb_lwip(void) {}
 void wdt_hb_tx(void) {}
@@ -501,8 +502,13 @@ void wdt_kick(void)
     }
 }
 
+static volatile uint32_t g_progress_kick_calls = 0;
+
+uint32_t wdt_get_progress_kick_calls(void) { return g_progress_kick_calls; }
+
 void wdt_progress_kick(void)
 {
+    g_progress_kick_calls++;   /* считаем ДО троттла — это и есть «per-frame путь крутится» */
     if (!g_wdt_started) return;
 
     XTime now;

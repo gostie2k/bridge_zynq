@@ -90,6 +90,11 @@ void wdt_kick(void);
  * по-прежнему. Дёшев: при попадании в троттл — один XTime read + сравнение. */
 void wdt_progress_kick(void);
 
+/* Диагностика: сколько раз вызывался wdt_progress_kick (ДО троттла) — растёт,
+ * если per-frame путь моста реально крутится. Сравнить с kick_count (фактические
+ * перезарядки таймера) в wdt_stats. */
+uint32_t wdt_get_progress_kick_calls(void);
+
 /* Heartbeat'ы — вызывать из соответствующих hot-path функций.
  * Дёшёвы: один volatile store + чтение XTime. */
 void wdt_hb_main(void);

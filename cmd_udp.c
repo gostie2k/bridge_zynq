@@ -704,6 +704,27 @@ static void handle_proto_0x90(struct udp_pcb *upcb, uint8_t *data,
         break;
     }
 
+    case 0x49: {  /* Инструментация залипания (диагностика мастера).
+                   * Response payload after [0x90][0x49]:
+                   *   [2..5]   xemacif_max_us  (пик с прошлого чтения, потом сброс)
+                   *   [6..9]   xemacif_last_us (длительность последнего прохода)
+                   *   [10..13] progress_kick_calls (вызовы wdt_progress_kick до троттла)
+                   *   [14..17] kick_count (фактические перезарядки WDT-таймера) */
+        extern volatile uint32_t g_xemacif_max_us, g_xemacif_last_us;
+        wdt_stats_t wst;
+        wdt_get_stats(&wst);
+        struct pbuf *pb = resp_alloc(0x49, 18);
+        if (!pb) break;
+        uint8_t *d = (uint8_t *)pb->payload;
+        put_le32(d + 2,  g_xemacif_max_us);
+        put_le32(d + 6,  g_xemacif_last_us);
+        put_le32(d + 10, wdt_get_progress_kick_calls());
+        put_le32(d + 14, wst.kick_count);
+        resp_send(upcb, pb, addr, port);
+        g_xemacif_max_us = 0;   /* сброс пика → следующий запрос даёт max за интервал */
+        break;
+    }
+
     default:
         LOG1("[CMD] Unknown 0x90 sub=0x%02X\r\n", sub);
         break;

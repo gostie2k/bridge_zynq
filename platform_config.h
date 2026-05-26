@@ -22,9 +22,9 @@
 
 
 #define BRIDGE 1
-//#define IS_MASTER 1
+#define IS_MASTER 1
 //#define IS_OLD_PAR 1
-#define IS_SLAVE 1
+//#define IS_SLAVE 1
 
 #define IS_ANTSDR
 //#define IS_MAKET_PKRV
@@ -59,8 +59,9 @@
  *  изменении (смена platform_config.h форсит пересборку cmd_udp.c → 0x48 отдаёт
  *  новую строку). Роль выводится из IS_MASTER/IS_SLAVE автоматически.
  *    r1 = slave-kick (radio_linkoutput)
- *    r2 = + master-kick (bridgeif_fdb_update_src) */
-#define FW_VERSION   "wdt-robust-r2"
+ *    r2 = + master-kick (bridgeif_fdb_update_src)
+ *    r3 = + инструментация (0x49: xemacif длительность, счётчик kick) */
+#define FW_VERSION   "wdt-robust-r3"
 
 #if defined(IS_MASTER) && !defined(IS_SLAVE)
   #define FW_ROLE_STR "MASTER"

@@ -239,6 +239,13 @@ struct netif *echo_netif;
 
 struct udp_pcb *recv_pcb;
 struct udp_pcb *debug_pcb;
+
+/* Инструментация xemacif_input (диагностика залипания мастера в LWIP_INPUT).
+ * Длительность завершённых проходов; max сбрасывается при чтении через 0x49.
+ * Фатальный проход (который не вернулся → WDT) тут не попадёт — но видно,
+ * насколько длинны ВОССТАНОВИВШИЕСЯ проходы (подходят ли к порогу WDT). */
+volatile uint32_t g_xemacif_max_us  = 0;
+volatile uint32_t g_xemacif_last_us = 0;
 struct udp_pcb *send_rx_data;
 
 //u16_t RemotePort = 8;
@@ -1990,7 +1997,15 @@ lwip_init();
 #endif
 
     	wdt_section_mark(WDT_SEC_LWIP_INPUT);
-    	xemacif_input(echo_netif);
+    	{
+    		XTime _xi_t0, _xi_t1;
+    		XTime_GetTime(&_xi_t0);
+    		xemacif_input(echo_netif);
+    		XTime_GetTime(&_xi_t1);
+    		uint32_t _xi_us = (uint32_t)(((uint64_t)(_xi_t1 - _xi_t0) * 1000000ULL) / COUNTS_PER_SECOND);
+    		g_xemacif_last_us = _xi_us;
+    		if (_xi_us > g_xemacif_max_us) g_xemacif_max_us = _xi_us;
+    	}
     	wdt_section_mark(WDT_SEC_POST_LWIP);   /* xemacif_input отработал */
     	wdt_hb_lwip();
 
