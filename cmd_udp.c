@@ -744,6 +744,20 @@ static void handle_proto_0x90(struct udp_pcb *upcb, uint8_t *data,
         break;
     }
 
+    case 0x4B: {  /* DIAG (B): счётчик GEM-ошибок + последняя (Direction/ErrorWord).
+                   * Response: [2..5]=err_count [6..9]=last_ErrorWord [10]=last_Direction */
+        extern volatile u32 g_gem_err_count, g_gem_err_last_word;
+        extern volatile u8  g_gem_err_last_dir;
+        struct pbuf *pb = resp_alloc(0x4B, 11);
+        if (!pb) break;
+        uint8_t *d = (uint8_t *)pb->payload;
+        put_le32(d + 2, g_gem_err_count);
+        put_le32(d + 6, g_gem_err_last_word);
+        d[10] = g_gem_err_last_dir;
+        resp_send(upcb, pb, addr, port);
+        break;
+    }
+
     default:
         LOG1("[CMD] Unknown 0x90 sub=0x%02X\r\n", sub);
         break;

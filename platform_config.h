@@ -62,8 +62,9 @@
  *    r2 = + master-kick (bridgeif_fdb_update_src)
  *    r3 = + инструментация (0x49: xemacif длительность, счётчик kick)
  *    r4 = + рейт-кап radio TX (A: держим master ниже триггера лок-апа GEM-RX)
- *    r5 = кап-дефолт 1.2M→1.0M (1.2M на стенде ещё ронял master; 1.0M держит 8+ мин) */
-#define FW_VERSION   "wdt-robust-r5"
+ *    r5 = кап-дефолт 1.2M→1.0M (1.2M на стенде ещё ронял master; 1.0M держит 8+ мин)
+ *    r6 = DIAG (B): счётчик GEM-ошибок 0x4B (+ врезка в BSP xemacpsif_hw.c) */
+#define FW_VERSION   "wdt-robust-r6"
 
 /* A: дефолтный кап radio TX в битах/с по ethernet-данным (0 = выключен).
  * 1.0 Mbps — проверено на стенде: master стабилен 8+ мин под 2M-нагрузкой (slave
