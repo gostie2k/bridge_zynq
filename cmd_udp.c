@@ -725,6 +725,25 @@ static void handle_proto_0x90(struct udp_pcb *upcb, uint8_t *data,
         break;
     }
 
+    case 0x4A: {  /* A: get/set рейт-кап radio TX.
+                   *   len=2: GET. len=6: SET (payload[2..5] = cap бит/с, LE32, 0=выкл).
+                   * Response: [2..5]=cap_bps  [6..9]=ratecap_drops */
+        if (len == 6) {
+            uint32_t v = (uint32_t)data[2] | ((uint32_t)data[3] << 8) |
+                         ((uint32_t)data[4] << 16) | ((uint32_t)data[5] << 24);
+            g_radio_tx_cap_bps = v;
+            xil_printf("[CAP] radio TX cap = %lu bps%s\r\n",
+                       (unsigned long)v, v ? "" : " (выключен)");
+        }
+        struct pbuf *pb = resp_alloc(0x4A, 10);
+        if (!pb) break;
+        uint8_t *d = (uint8_t *)pb->payload;
+        put_le32(d + 2, g_radio_tx_cap_bps);
+        put_le32(d + 6, radio_get_tx_ratecap_drops());
+        resp_send(upcb, pb, addr, port);
+        break;
+    }
+
     default:
         LOG1("[CMD] Unknown 0x90 sub=0x%02X\r\n", sub);
         break;

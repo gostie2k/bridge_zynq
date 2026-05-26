@@ -7,6 +7,8 @@
 #include "modem.h"
 #include "watchdog.h"
 #include "cmd_udp.h"   /* для g_log_level / LOG_HOT */
+#include "xtime_l.h"        /* XTime для рейт-капа radio TX */
+#include "platform_config.h"  /* RADIO_TX_CAP_BPS_DEFAULT */
 
 extern struct netif port3_bridge;
 
@@ -59,6 +61,18 @@ static u32 dbg_err_pkt_gap = 0;   // РџСЂРѕРїСѓСЃРєРё packet ID 
 static int crc_dump_done = 0;     // Р¤Р»Р°Рі РґР»СЏ РѕРґРЅРѕРєСЂР°С‚РЅРѕРіРѕ РґР°РјРїР° CRC-РѕС€РёР±РєРё
 static u32 dbg_err_tx_stall = 0;  // tx_process РїСЂРµСЂРІР°Р»СЃСЏ (TX FIFO РїРѕР»РѕРЅ)
 static u32 dbg_err_tx_reject = 0; // РџР°РєРµС‚ РѕС‚Р±СЂРѕС€РµРЅ (tx_ring РїРѕР»РѕРЅ)
+static u32 dbg_err_tx_ratecap = 0; // Пакет отброшен рейт-капом (A: защита master)
+
+/* === A: рейт-кап radio TX ===
+ * Держим поток в радио ниже триггера лок-апа GEM-RX на приёмнике (master виснет
+ * под 1.5M+ — лок-ап драйвера GEM Zynq-7000, см. docs/wdt_robustness_report.md).
+ * Кап в БИТАХ/с по ethernet-данным пакета; 0 = выключен. Тюнится по UDP 0x90 0x4A.
+ * Token-bucket: дёшево дропаем ДО дорогой работы, если радио-поток превысил кап. */
+volatile uint32_t g_radio_tx_cap_bps = RADIO_TX_CAP_BPS_DEFAULT;
+static XTime   tb_last_time = 0;
+static int64_t tb_tokens    = 0;   // доступные байты
+
+uint32_t radio_get_tx_ratecap_drops(void) { return dbg_err_tx_ratecap; }
 
 // RX РџР°СЂСЃРµСЂ
 typedef enum {
@@ -375,6 +389,28 @@ err_t radio_linkoutput(struct netif *netif, struct pbuf *p) {
      * пакеты реально текут через radio path, это прогресс, а не hang. Ставим
      * ДО drop-проверки, чтобы поток дропаемых пакетов тоже держал таймер. */
     wdt_progress_kick();
+
+    /* A: рейт-кап radio TX (token-bucket). Дропаем дёшево, если поток в радио
+     * превысил g_radio_tx_cap_bps — чтобы master не получал поток, на котором
+     * ловит лок-ап GEM-RX. 0 = выключен. */
+    if (g_radio_tx_cap_bps > 0) {
+        XTime _now;
+        XTime_GetTime(&_now);
+        if (tb_last_time == 0) tb_last_time = _now;
+        uint64_t _el = (uint64_t)(_now - tb_last_time);
+        int64_t  _add = (int64_t)(((uint64_t)g_radio_tx_cap_bps / 8ULL) * _el / COUNTS_PER_SECOND);
+        if (_add > 0) {
+            int64_t _burst = (int64_t)((uint64_t)g_radio_tx_cap_bps / 8ULL / 10ULL); /* ~100мс */
+            tb_tokens += _add;
+            if (tb_tokens > _burst) tb_tokens = _burst;
+            tb_last_time = _now;   /* обновляем только при реальном пополнении — без потери дробных токенов */
+        }
+        if (tb_tokens < (int64_t)p->tot_len) {
+            dbg_err_tx_ratecap++;
+            return ERR_MEM;
+        }
+        tb_tokens -= (int64_t)p->tot_len;
+    }
 
     if ((RING_SIZE - tx_count) < (p->tot_len + 10)) {
         dbg_err_tx_reject++;

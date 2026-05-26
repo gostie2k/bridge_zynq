@@ -22,9 +22,9 @@
 
 
 #define BRIDGE 1
-#define IS_MASTER 1
+//#define IS_MASTER 1
 //#define IS_OLD_PAR 1
-//#define IS_SLAVE 1
+#define IS_SLAVE 1
 
 #define IS_ANTSDR
 //#define IS_MAKET_PKRV
@@ -60,8 +60,14 @@
  *  новую строку). Роль выводится из IS_MASTER/IS_SLAVE автоматически.
  *    r1 = slave-kick (radio_linkoutput)
  *    r2 = + master-kick (bridgeif_fdb_update_src)
- *    r3 = + инструментация (0x49: xemacif длительность, счётчик kick) */
-#define FW_VERSION   "wdt-robust-r3"
+ *    r3 = + инструментация (0x49: xemacif длительность, счётчик kick)
+ *    r4 = + рейт-кап radio TX (A: держим master ниже триггера лок-апа GEM-RX) */
+#define FW_VERSION   "wdt-robust-r4"
+
+/* A: дефолтный кап radio TX в битах/с по ethernet-данным (0 = выключен).
+ * 1.2 Mbps — чуть выше доказанно-чистых ~1.0M, ниже триггера лок-апа master
+ * (~1.5M). Тюнится в рантайме по UDP 0x90 0x4A; найди max-safe свипом. */
+#define RADIO_TX_CAP_BPS_DEFAULT  1200000u
 
 #if defined(IS_MASTER) && !defined(IS_SLAVE)
   #define FW_ROLE_STR "MASTER"
