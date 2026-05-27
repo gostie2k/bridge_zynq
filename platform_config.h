@@ -69,8 +69,12 @@
  *    r8 = DIAG (B): section-маркер в process_sent_bds (TX-done ISR) → crash_section=12.
  *         РЕЗУЛЬТАТ: фриз дал crash_section=1(LWIP_INPUT), НЕ 12 → process_sent_bds исключён.
  *    r9 = DIAG (B) итерация 2: маркеры в low_level_output(10), netif->input/мост(7),
- *         emacps_recv_handler RX-ISR(8). Следующий фриз сузит место. Кап ВЫКЛ. */
-#define FW_VERSION   "wdt-robust-r9-diag"
+ *         emacps_recv_handler RX-ISR(8). Следующий фриз сузит место. Кап ВЫКЛ.
+ *    r10 = ★ ФИКС B: SPI RSSI/gain вынесен из GPIO-ISR (IntrHandler) в main loop
+ *          (по флагу is_pow_rx). Корень фриза master = блокирующий SPI busy-wait
+ *          в прерывании. Кап ВЫКЛ (корень чинится по-настоящему, троттл не нужен).
+ *          Диаг-маркеры r6/r8/r9 пока оставлены для верификации фикса. */
+#define FW_VERSION   "wdt-robust-r10-spifix"
 
 /* A: дефолтный кап radio TX в битах/с по ethernet-данным (0 = выключен).
  * Рабочее значение — 1000000u (master стабилен 8+ мин под 2M). СЕЙЧАС 0 (выкл)

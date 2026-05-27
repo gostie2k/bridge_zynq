@@ -1062,22 +1062,11 @@ if (  ((Status&0x20000000) == 0x20000000)&&(Bank == 3))
 {
   XGpioPs_IntrClearPin(Gpioint, 54+61);
 
-  uint8_t d[] = {0x01,0x61,0x00,0x00};
-  no_os_spi_write_and_read(&desc_tmp,&d[0],1);
-  //xil_printf("%02X ", d[2]);
-
-  float rssi = -d[2];
-  rssi/=4.;
-
-  d[0] = 0x02; d[1] = 0xb0;
-  no_os_spi_write_and_read(&desc_tmp,&d[0],1);
-  //xil_printf("%02X", d[2]);
-
-  rssi-=d[2];
-
-  gain_index_rx = d[2];
-
-  pow_rx = rssi + 13.9397;//3500 tone corection
+  /* SPI-чтение RSSI/gain ПЕРЕНЕСЕНО в main loop (по флагу is_pow_rx).
+   * Было: два no_os_spi_write_and_read прямо ЗДЕСЬ, в GPIO-ISR. SPI-engine
+   * busy-wait без таймаута (modem-spi-busywait-bug) → при стопоре SPI ISR висит
+   * вечно → ТОТАЛЬНЫЙ ФРИЗ master → WDT. Это и был корень фриза мастера.
+   * ISR теперь только взводит флаг, тяжёлый SPI — в main loop. */
   is_pow_rx = true;
 
  // printf("#1 %.2f dB \n\r", rssi);
@@ -2026,6 +2015,21 @@ lwip_init();
 
     	if (is_pow_rx)
     		{
+    		/* SPI RSSI/gain — ПЕРЕНЕСЕНО сюда из IntrHandler (GPIO-ISR), где
+    		 * блокирующий SPI busy-wait вешал master. В main loop стопор SPI не
+    		 * фатален; wdt_hb_main() после — освежить heartbeat на случай задержки. */
+    		{
+    			uint8_t d[] = {0x01, 0x61, 0x00, 0x00};
+    			no_os_spi_write_and_read(&desc_tmp, &d[0], 1);
+    			float rssi = -d[2];
+    			rssi /= 4.0f;
+    			d[0] = 0x02; d[1] = 0xb0;
+    			no_os_spi_write_and_read(&desc_tmp, &d[0], 1);
+    			rssi -= d[2];
+    			gain_index_rx = d[2];
+    			pow_rx = rssi + 13.9397f;   /* 3500 tone correction */
+    		}
+    		wdt_hb_main();
 
     		if (status_modem->status_rx.cnt_pkt == 0)
     	    		{
