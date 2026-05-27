@@ -586,7 +586,7 @@ void ppos_set_tangenta(ena_type ena)
   	 ad9361_set_tx_lo_freq (ad9361_phy, freq);
 
 
-  	 tx_chan0.creg3.inside.ad9361_tx_atten = 0x000003ff&(40000/250); //mdB/250  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!   Tx2
+  	 tx_chan0.creg3.inside.ad9361_tx_atten = 0x000003ff&(30000/250); //mdB/250 → 30 дБ (было 40000=40дБ)   Tx2
   	 AXI_CNTRL_REG_WRITE(AXI_CNTRL_REG_BASEADDR + TX_CHAN0_PAR_OFFSET, 3*4,  (u32) tx_chan0.creg3.word);
 
      uint32_t atten =  tx_chan0.creg3.inside.ad9361_tx_atten;

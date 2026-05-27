@@ -15,7 +15,7 @@
  * Дефолтное значение задаётся LOG_DEBUG_DEFAULT (или 2 если не определено).
  * =================================================================== */
 #ifndef LOG_DEBUG_DEFAULT
-#define LOG_DEBUG_DEFAULT  2
+#define LOG_DEBUG_DEFAULT  0
 #endif
 
 extern volatile int g_log_level;
