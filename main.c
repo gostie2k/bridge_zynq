@@ -1400,7 +1400,9 @@ int main()
     AXI_CNTRL_REG_WRITE(AXI_CNTRL_REG_BASEADDR, 12, ppos.creg3.word);
 
 
-	ppos.creg5.inside.slot_dur = 2000;
+	ppos.creg5.inside.slot_dur = 1000;   /* мкс. Было 2000 → рассинхрон TDMA с slave,
+	                                      * созвездие не собиралось. 1000 = как в
+	                                      * ppos_set_tangenta и как ставилось вручную. */
 
     AXI_CNTRL_REG_WRITE(AXI_CNTRL_REG_BASEADDR, 20, ppos.creg5.word);
 
