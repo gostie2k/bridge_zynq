@@ -73,8 +73,9 @@
  *    r10 = ★ ФИКС B: SPI RSSI/gain вынесен из GPIO-ISR (IntrHandler) в main loop
  *          (по флагу is_pow_rx). Корень фриза master = блокирующий SPI busy-wait
  *          в прерывании. Кап ВЫКЛ (корень чинится по-настоящему, троттл не нужен).
- *          Диаг-маркеры r6/r8/r9 пока оставлены для верификации фикса. */
-#define FW_VERSION   "wdt-robust-r10-spifix"
+ *    r11 = WDT-тумблер: вкл/выкл по UDP 0x90 0x4C, дефолт WDT_ENABLED_DEFAULT.
+ *          Финальная форма WDT перед мержем. */
+#define FW_VERSION   "wdt-robust-r11"
 
 /* A: дефолтный кап radio TX в битах/с по ethernet-данным (0 = выключен).
  * Рабочее значение — 1000000u (master стабилен 8+ мин под 2M). СЕЙЧАС 0 (выкл)

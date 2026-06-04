@@ -1848,7 +1848,8 @@ lwip_init();
      * иначе долгий init (AD9361, FIFO reset и т.п.) может задавить таймер.
      * GIC уже инициализирован в knk_init_platform → init_ScuGic. */
     if (wdt_init((struct XScuGic *)&ScuGic) == 0) {
-        wdt_start();
+        /* Старт по дефолту WDT_ENABLED_DEFAULT; рантайм-тумблер — UDP 0x90 0x4C. */
+        if (WDT_ENABLED_DEFAULT) wdt_start();
     }
 
     while(1)

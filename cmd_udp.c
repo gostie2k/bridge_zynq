@@ -758,6 +758,20 @@ static void handle_proto_0x90(struct udp_pcb *upcb, uint8_t *data,
         break;
     }
 
+    case 0x4C: {  /* WDT вкл/выкл (тумблер).
+                   *   len=2: GET. len=3: SET (payload[2]: 0=выкл, иначе вкл).
+                   * Response: [2] = текущее состояние (1=включён). */
+        if (len >= 3) {
+            wdt_set_enabled(data[2] ? 1 : 0);
+        }
+        struct pbuf *pb = resp_alloc(0x4C, 3);
+        if (!pb) break;
+        ((uint8_t *)pb->payload)[2] = (uint8_t)wdt_is_enabled();
+        resp_send(upcb, pb, addr, port);
+        LOG1("[CMD 0x4C] WDT %s\r\n", wdt_is_enabled() ? "ON" : "OFF");
+        break;
+    }
+
     default:
         LOG1("[CMD] Unknown 0x90 sub=0x%02X\r\n", sub);
         break;

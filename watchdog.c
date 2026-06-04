@@ -16,6 +16,8 @@ void wdt_capture_reboot_status(void) {}
 int  wdt_init(struct XScuGic *gic) { (void)gic; xil_printf("[WDT] disabled (debug build)\r\n"); return 0; }
 void wdt_start(void) {}
 void wdt_stop(void) {}
+void wdt_set_enabled(int enable) { (void)enable; }
+int  wdt_is_enabled(void) { return 0; }
 void wdt_kick(void) {}
 void wdt_progress_kick(void) {}
 uint32_t wdt_get_progress_kick_calls(void) { return 0; }
@@ -461,6 +463,18 @@ void wdt_stop(void)
     g_wdt_started = 0;
     xil_printf("[WDT] stopped\r\n");
 }
+
+void wdt_set_enabled(int enable)
+{
+    if (enable) {
+        if (g_wdt_inited && !g_wdt_started) wdt_start();
+    } else {
+        if (g_wdt_started) wdt_stop();
+    }
+    xil_printf("[WDT] %s by request\r\n", enable ? "ENABLED" : "DISABLED");
+}
+
+int wdt_is_enabled(void) { return g_wdt_started; }
 
 void wdt_kick(void)
 {
