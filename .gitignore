@@ -1,0 +1,4 @@
+# Артефакты прогонов/отладки (не код, не документация)
+ceiling_*.log
+stability_*.log
+docs/cmd_temp_log.txt
