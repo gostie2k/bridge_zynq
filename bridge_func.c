@@ -1,7 +1,6 @@
 #include "bridge_func.h"
 #include "lwip/pbuf.h"
 #include "cmd_buf.h"
-#include "cmd_udp.h"   /* для g_log_level / LOG_HOT */
 //extern struct netif udp_netif2;
 extern struct netif port1_bridge;
 //extern struct netif port2_bridge;
@@ -42,42 +41,6 @@ void print_dynamic_fdb(struct netif *bridgeif) {
     xil_printf("--- end dynamic FDB ---\n\r");
 }
 
-/* Recovery: чистим все dynamic FDB-entries у bridge_netif.
- *
- * Static-entries (заданные в BRIDGEIF_INITDATA1 — 16 штук с захардкоженными
- * MAC'ами modem'ов) bridgeif хранит отдельно, их это не трогает.
- *
- * После cleanup bridgeif заново выучит активные источники из проходящего
- * трафика. Это лечит ситуации:
- *   - bridge выучил MAC на одном порту, потом устройство мигрировало → пакеты
- *     к нему уходят не туда;
- *   - таблица заполнена устаревшими entries (timer aging отключён в нашем
- *     форке — см. bridgeif_fdb.c);
- *   - lwIP stats показывают drops, но UDP control plane работает.
- *
- * Не трогаем udp_pcb — он не страдает от FDB-проблем, а его пересоздание
- * из callback'а опасно для lwIP. */
-u16_t bridge_recover_lwip(void) {
-    bridgeif_fdb_dynamic_t *db =
-        (bridgeif_fdb_dynamic_t*)bridgeif_get_dynamic_fdb(&bridge_netif);
-    if (!db || !db->fdb) {
-        xil_printf("[RECOV] lwip: FDB pointer NULL — skip\r\n");
-        return 0;
-    }
-
-    u16_t cleared = 0;
-    for (u16_t i = 0; i < db->max_fdb_entries; i++) {
-        bridgeif_fdb_dynamic_entry_t *e = &db->fdb[i];
-        if (e->used) {
-            e->used = 0;
-            cleared++;
-        }
-    }
-    xil_printf("[RECOV] lwip: cleared %u dynamic FDB entries\r\n",
-               (unsigned)cleared);
-    return cleared;
-}
-
 
 
 
@@ -102,7 +65,7 @@ err_t vport2_linkoutput(struct netif *netif, struct pbuf *p) {
 	err_t out = ERR_OK;
 	out = pbuf_copy(pp, p);
 
-	if (g_log_level >= 3)
+	if (DEB_FUNC)
 	{
 	       struct eth_hdr *ethhdr = (struct eth_hdr*)p->payload;
 	        xil_printf("[port2_bridge] ethernet_input: dest:%02X:%02X:%02X:%02X:%02X:%02X, src:%02X:%02X:%02X:%02X:%02X:%02X, type:%04X  len: %4d  \n\r",
@@ -163,21 +126,10 @@ err_t vport3_linkoutput(struct netif *netif, struct pbuf *p) {
 	 struct eth_hdr *ethhdr = (struct eth_hdr*)p->payload;
      err_t out = ERR_OK;
 
-     // ===== DBG #1 (только при log_level >= 3, hot-path) =====
-     	if (g_log_level >= 3) {
-     		static int n1 = 0;
-     		if (p->tot_len > 1000 && (n1++ % 50) == 0) {
-     			uint8_t *d = (uint8_t*)p->payload;
-     			xil_printf("[M-TX1] tot=%d len=%d  %02X%02X%02X%02X%02X%02X %02X%02X%02X%02X%02X%02X %02X%02X\r\n",
-     				p->tot_len, p->len,
-     				d[0],d[1],d[2],d[3],d[4],d[5],
-     				d[6],d[7],d[8],d[9],d[10],d[11],
-     				d[12],d[13]);
-     		}
-     	}
-     	// ===== END =====
 
-	if (g_log_level >= 3)
+
+    // if ((p->tot_len != p->len)||(p->tot_len>=1500))
+	if (DEB_FUNC)
 	{
 	       //struct eth_hdr *ethhdr = (struct eth_hdr*)p->payload;
 	        xil_printf("vport3_linkoutput: dest:%02X:%02X:%02X:%02X:%02X:%02X, src:%02X:%02X:%02X:%02X:%02X:%02X, type:%04X  tot_len: %4d len: %4d \n\r",
@@ -220,6 +172,10 @@ err_t vport3_linkoutput(struct netif *netif, struct pbuf *p) {
 
 	if (tx_chan0.creg0.inside.pkt_len == 4800)
 	{
+
+
+
+
 	    cmd_push(&buf_cmd,(uint8_t*) p->payload, p->len);
 	    deb_cnt_rf++;
 	    //pbuf_free(p);
@@ -233,9 +189,9 @@ err_t vport3_linkoutput(struct netif *netif, struct pbuf *p) {
 
 //	 if (tx_seg_on)
 //	 {
-	    /* =====  :      ===== */
+	    /* ===== ������� �����: ���������� ����� ��������� � ���������� ===== */
 	   // if (!firewall_filter(p, &bridge_netif)) {
-	        /*          */
+	        /* ����� �� ������ ������ � �� ���������� � ����� */
 	   //     return ERR_OK;
 	   // }
 //	    deb_cnt_rf++;
@@ -270,7 +226,7 @@ err_t udpif2_init(struct netif *netif) {
 
 err_t udpif2_linkoutput(struct netif *netif, struct pbuf *p) {
 
-	if (g_log_level >= 3)
+	if (DEB_FUNC)
 	{
        struct eth_hdr *ethhdr = (struct eth_hdr*)p->payload;
         xil_printf("[udp_netif2]   ethernet_input: dest:%02X:%02X:%02X:%02X:%02X:%02X, src:%02X:%02X:%02X:%02X:%02X:%02X, type:%04X  len: %4d  \n\r",
@@ -293,7 +249,7 @@ err_t eth_inp(struct pbuf *p, struct netif *netif)
 {
 //Bridge network interface
 
-	if (g_log_level >= 3)
+	if (DEB_FUNC)
 	{
 	       struct eth_hdr *ethhdr = (struct eth_hdr*)p->payload;
 	        xil_printf("[bridge_netif] ethernet_input: dest:%02X:%02X:%02X:%02X:%02X:%02X, src:%02X:%02X:%02X:%02X:%02X:%02X, type:%04X  len: %4d  \n\r",

@@ -152,6 +152,7 @@ struct stat_npu
 	   } tx_panel_2;
 
 	   uint8_t cntrl_temp_filt_board;
+	   uint32_t del_ack;
 
 };
 #pragma pack(pop)
@@ -169,6 +170,7 @@ struct stat_modem
 	struct stat_cntrl_tx status_cntrl_tx;
 	struct stat_rx  status_rx;
     struct stat_npu status_npu;
+    //uint32_t creg2;
 };
 #pragma pack(pop)
 
@@ -434,6 +436,9 @@ struct ppos_par
 
 
 	/** time selection parameters */
+
+	/*
+
    union
     {
 	  uint32_t word;
@@ -458,14 +463,35 @@ struct ppos_par
 		} creg5;
 
 
+*/
+
+
+
+	 union
+	    {
+		  uint32_t word;
+		  struct
+		   {
+			  uint8_t txnrx_setup;
+			  uint8_t txnrx_hold;
+			  uint8_t vco_setup;
+			  uint8_t num_seg:4;
+			  uint8_t reserve:4;
+		    } inside;
+		} creg4;
 
 
 
 
-
-
-
-
+		  union
+		    {
+			  uint32_t word;
+			  struct
+			   {
+				  uint16_t slot_dur; //us
+				  uint16_t reserve:16;
+			    } inside;
+			} creg5;
 
 
 
@@ -487,6 +513,22 @@ struct ppos_par
 		     unsigned reserve:20;
 	    } inside;
 	} creg6;
+
+
+
+		   union
+		    {
+			  uint32_t word;
+			  struct
+			   {
+				     //from bit#0....down to bit#31
+				  uint32_t del_ack;
+			    } inside;
+			} creg7;
+
+
+
+
 
 
 

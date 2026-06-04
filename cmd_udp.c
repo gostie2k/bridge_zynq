@@ -6,12 +6,10 @@
  * =================================================================== */
 
 #include "cmd_udp.h"
-#include "platform_config.h"   /* FW_ROLE_ID / FW_BUILD_STR */
 #include "radio_stream.h"
-#include "modem.h"
 #include "firewall.h"
 #include "watchdog.h"
-#include "bridge_func.h"
+#include "platform_config.h"   /* FW_ROLE_ID / FW_BUILD_STR */
 #include "lwip/pbuf.h"
 #include "lwip/udp.h"
 #include "lwip/ip_addr.h"
@@ -29,18 +27,9 @@ extern XLlFifo                  fifo;
 extern struct ad9361_rf_phy    *ad9361_phy;
 extern struct no_os_spi_desc    desc_tmp;
 
-extern struct ppos_tx  tx_chan0;
-extern struct ppos_rx  rx_chan0;   /* в main.c определена как ppos_rx */
+extern struct ppos_tx tx_chan0;
+extern struct ppos_tx rx_chan0;
 extern struct ppos_par ppos;
-
-/* Runtime-управляемый уровень логирования. Меняется через 0x90 0x46.
- * volatile т.к. читается из main loop / hot path и может быть изменён
- * из cmd_udp_callback (другой контекст исполнения). */
-volatile int g_log_level = LOG_DEBUG_DEFAULT;
-
-/* Forward declaration — определение ниже по файлу. */
-static void handle_creg_exch(struct udp_pcb *upcb, uint8_t *data,
-                             uint16_t len, const ip_addr_t *addr, u16_t port);
 
 /* ===================================================================
  *  Helpers
@@ -518,257 +507,48 @@ static void handle_proto_0x90(struct udp_pcb *upcb, uint8_t *data,
         break;
     }
 
-    /* ==================== Watchdog diagnostics ==================== */
-
-    case 0x40: {  /* Read watchdog stats
-                   * Response payload after [0x90][0x40]:
-                   *   [2..5]   reboot_status (SLCR)
-                   *   [6]      wdt_reset_flag (0/1)
-                   *   [7]      reserved
-                   *   [8..11]  kick_count
-                   *   [12..15] starve_count
-                   *   [16..19] last_starve_mask
-                   *   [20..23] uptime_sec
-                   *   [24]     crash_section (wdt_section_t)
-                   *   [25]     crash_oldest_hb (0=MAIN 1=LWIP 2=TX 3=RX 0xF=none)
-                   *   [26]     crash_starve_mask
-                   *   [27]     crash_valid (1 если crash-info прочиталась)
-                   */
+    case 0x40: {  /* Read watchdog stats.
+                   * [2..5]reboot_status [6]wdt_reset_flag [7]rsv [8..11]kick_count
+                   * [12..15]starve_count [16..19]last_starve_mask [20..23]uptime_sec
+                   * [24]crash_section [25]crash_oldest_hb [26]crash_starve_mask [27]crash_valid */
         wdt_stats_t st;
         wdt_get_stats(&st);
         struct pbuf *pb = resp_alloc(0x40, 28);
         if (!pb) break;
         uint8_t *d = (uint8_t *)pb->payload;
         put_le32(d + 2,  st.reboot_status);
-        d[6] = (uint8_t)st.wdt_reset_flag;
-        d[7] = 0;
+        d[6] = (uint8_t)st.wdt_reset_flag;  d[7] = 0;
         put_le32(d + 8,  st.kick_count);
         put_le32(d + 12, st.starve_count);
         put_le32(d + 16, st.last_starve_mask);
         put_le32(d + 20, st.uptime_sec);
-        d[24] = st.crash_section;
-        d[25] = st.crash_oldest_hb;
-        d[26] = st.crash_starve_mask;
-        d[27] = st.crash_valid;
+        d[24] = st.crash_section;  d[25] = st.crash_oldest_hb;
+        d[26] = st.crash_starve_mask;  d[27] = st.crash_valid;
         resp_send(upcb, pb, addr, port);
-        LOG1("[CMD 0x40] WDT stats: uptime=%lu kick=%lu starve=%lu mask=0x%02X crash{sect=%s oldest=%u mask=0x%X valid=%u}\r\n",
-             st.uptime_sec, st.kick_count, st.starve_count,
-             (unsigned)st.last_starve_mask,
-             wdt_section_name(st.crash_section),
-             (unsigned)st.crash_oldest_hb,
-             (unsigned)st.crash_starve_mask,
-             (unsigned)st.crash_valid);
         break;
     }
 
-    case 0x41: {  /* Simulate hang (для тестирования WDT) */
-        if (len < 3 || data[2] != 0x5A) {
-            LOG1("[CMD 0x41] bad magic\r\n");
-            break;
-        }
-        struct pbuf *pb = resp_alloc(0x41, 3);
-        if (pb) {
-            ((uint8_t *)pb->payload)[2] = 0x01;
-            resp_send(upcb, pb, addr, port);
-        }
-        LOG1("[CMD 0x41] simulating hang — system will reset\r\n");
-        wdt_simulate_hang();
-        break;
-    }
-
-    case 0x42: {  /* Direct SLCR soft reset (bypass WDT/ISR) */
-        if (len < 3 || data[2] != 0xA5) {
-            LOG1("[CMD 0x42] bad magic\r\n");
-            break;
-        }
-        struct pbuf *pb = resp_alloc(0x42, 3);
-        if (pb) {
-            ((uint8_t *)pb->payload)[2] = 0x01;
-            resp_send(upcb, pb, addr, port);
-        }
-        LOG1("[CMD 0x42] direct SLCR soft reset\r\n");
-        wdt_force_reset_now();
-        break;
-    }
-
-    /* ─── Recovery handlers (manual trigger, без PS reset) ──────────────
-     * 0x43 — recover lwIP (cleanup dynamic FDB)
-     * 0x44 — recover radio TX (FIFO TX reset + ring/counters)
-     * 0x45 — recover radio RX (FIFO RX reset + parser state)
-     * Все требуют magic byte 0x52 (= 'R') в payload[2]. */
-    case 0x43: {  /* Recover lwIP */
-        if (len < 3 || data[2] != 0x52) {
-            LOG1("[CMD 0x43] bad magic\r\n");
-            struct pbuf *pb = resp_alloc(0x43, 3);
-            if (pb) { ((uint8_t *)pb->payload)[2] = 0x00; resp_send(upcb, pb, addr, port); }
-            break;
-        }
-        u16_t cleared = bridge_recover_lwip();
-        struct pbuf *pb = resp_alloc(0x43, 5);
-        if (pb) {
-            uint8_t *d = (uint8_t *)pb->payload;
-            d[2] = 0x01;
-            d[3] = (uint8_t)(cleared & 0xFF);
-            d[4] = (uint8_t)((cleared >> 8) & 0xFF);
-            resp_send(upcb, pb, addr, port);
-        }
-        LOG1("[CMD 0x43] lwip recovery: %u FDB entries cleared\r\n", (unsigned)cleared);
-        break;
-    }
-
-    case 0x44: {  /* Recover radio TX */
-        if (len < 3 || data[2] != 0x52) {
-            LOG1("[CMD 0x44] bad magic\r\n");
-            struct pbuf *pb = resp_alloc(0x44, 3);
-            if (pb) { ((uint8_t *)pb->payload)[2] = 0x00; resp_send(upcb, pb, addr, port); }
-            break;
-        }
-        radio_recover_tx();
-        struct pbuf *pb = resp_alloc(0x44, 3);
-        if (pb) { ((uint8_t *)pb->payload)[2] = 0x01; resp_send(upcb, pb, addr, port); }
-        LOG1("[CMD 0x44] radio TX recovery done\r\n");
-        break;
-    }
-
-    case 0x45: {  /* Recover radio RX */
-        if (len < 3 || data[2] != 0x52) {
-            LOG1("[CMD 0x45] bad magic\r\n");
-            struct pbuf *pb = resp_alloc(0x45, 3);
-            if (pb) { ((uint8_t *)pb->payload)[2] = 0x00; resp_send(upcb, pb, addr, port); }
-            break;
-        }
-        radio_recover_rx();
-        struct pbuf *pb = resp_alloc(0x45, 3);
-        if (pb) { ((uint8_t *)pb->payload)[2] = 0x01; resp_send(upcb, pb, addr, port); }
-        LOG1("[CMD 0x45] radio RX recovery done\r\n");
-        break;
-    }
-
-    /* Get/Set IQ-stream enable (debug FIFO → UDP на PC).
-     *   Request len=2: GET — ответ [0x90][0x47][state]
-     *   Request len=3: SET — payload[2] = 0/1, ответ тот же.
-     * По умолчанию OFF — иначе spam забивает pbuf pool и WDT-ребутит. */
-    case 0x47: {
-        extern volatile bool g_iq_stream_enabled;
-        if (len >= 3) {
-            g_iq_stream_enabled = (data[2] != 0);
-            xil_printf("[IQ] stream %s\r\n", g_iq_stream_enabled ? "ENABLED" : "disabled");
-        }
-        struct pbuf *pb = resp_alloc(0x47, 3);
-        if (pb) {
-            ((uint8_t *)pb->payload)[2] = g_iq_stream_enabled ? 1 : 0;
-            resp_send(upcb, pb, addr, port);
-        }
-        break;
-    }
-
-    /* Get/Set runtime log level (0..3).
-     *   Request len=2: GET — ответ [0x90][0x46][level]
-     *   Request len=3: SET — payload[2] = новый уровень, ответ тот же. */
-    case 0x46: {
-        if (len >= 3) {
-            int new_level = (int)data[2];
-            if (new_level < 0) new_level = 0;
-            if (new_level > 3) new_level = 3;
-            g_log_level = new_level;
-            /* Печатаем безусловно (через xil_printf), чтобы видеть смену
-             * уровня даже когда выключаем логи в 0. */
-            xil_printf("[LOG] level set to %d\r\n", new_level);
-        }
-        struct pbuf *pb = resp_alloc(0x46, 3);
-        if (pb) {
-            ((uint8_t *)pb->payload)[2] = (uint8_t)g_log_level;
-            resp_send(upcb, pb, addr, port);
-        }
-        break;
-    }
-
-    case 0x48: {  /* Firmware info: роль + версия (чтобы по eth убедиться
-                   * ЧТО и КУДА залито).
-                   * Response payload after [0x90][0x48]:
-                   *   [2]    role_id (1=MASTER, 2=SLAVE, 0=мисконфиг)
-                   *   [3]    reserved (0)
-                   *   [4..]  ASCII версия, null-terminated (FW_BUILD_STR) */
+    case 0x48: {  /* Firmware info: [2]=role_id (1=MASTER,2=SLAVE,0=мисконфиг)
+                   *                [3]=rsv [4..]=ASCII версия\0 */
         const char *ver = FW_BUILD_STR;
         uint16_t vlen = (uint16_t)strlen(ver);
         if (vlen > 200) vlen = 200;
         struct pbuf *pb = resp_alloc(0x48, (uint16_t)(4 + vlen + 1));
         if (!pb) break;
         uint8_t *d = (uint8_t *)pb->payload;
-        d[2] = (uint8_t)FW_ROLE_ID;
-        d[3] = 0;
-        memcpy(d + 4, ver, vlen);
-        d[4 + vlen] = 0;
-        resp_send(upcb, pb, addr, port);
-        LOG1("[CMD 0x48] FW info: role_id=%u %s\r\n", (unsigned)FW_ROLE_ID, ver);
-        break;
-    }
-
-    case 0x49: {  /* Инструментация залипания (диагностика мастера).
-                   * Response payload after [0x90][0x49]:
-                   *   [2..5]   xemacif_max_us  (пик с прошлого чтения, потом сброс)
-                   *   [6..9]   xemacif_last_us (длительность последнего прохода)
-                   *   [10..13] progress_kick_calls (вызовы wdt_progress_kick до троттла)
-                   *   [14..17] kick_count (фактические перезарядки WDT-таймера) */
-        extern volatile uint32_t g_xemacif_max_us, g_xemacif_last_us;
-        wdt_stats_t wst;
-        wdt_get_stats(&wst);
-        struct pbuf *pb = resp_alloc(0x49, 18);
-        if (!pb) break;
-        uint8_t *d = (uint8_t *)pb->payload;
-        put_le32(d + 2,  g_xemacif_max_us);
-        put_le32(d + 6,  g_xemacif_last_us);
-        put_le32(d + 10, wdt_get_progress_kick_calls());
-        put_le32(d + 14, wst.kick_count);
-        resp_send(upcb, pb, addr, port);
-        g_xemacif_max_us = 0;   /* сброс пика → следующий запрос даёт max за интервал */
-        break;
-    }
-
-    case 0x4A: {  /* A: get/set рейт-кап radio TX.
-                   *   len=2: GET. len=6: SET (payload[2..5] = cap бит/с, LE32, 0=выкл).
-                   * Response: [2..5]=cap_bps  [6..9]=ratecap_drops */
-        if (len == 6) {
-            uint32_t v = (uint32_t)data[2] | ((uint32_t)data[3] << 8) |
-                         ((uint32_t)data[4] << 16) | ((uint32_t)data[5] << 24);
-            g_radio_tx_cap_bps = v;
-            xil_printf("[CAP] radio TX cap = %lu bps%s\r\n",
-                       (unsigned long)v, v ? "" : " (выключен)");
-        }
-        struct pbuf *pb = resp_alloc(0x4A, 10);
-        if (!pb) break;
-        uint8_t *d = (uint8_t *)pb->payload;
-        put_le32(d + 2, g_radio_tx_cap_bps);
-        put_le32(d + 6, radio_get_tx_ratecap_drops());
+        d[2] = (uint8_t)FW_ROLE_ID;  d[3] = 0;
+        memcpy(d + 4, ver, vlen);  d[4 + vlen] = 0;
         resp_send(upcb, pb, addr, port);
         break;
     }
 
-    case 0x4B: {  /* DIAG (B): счётчик GEM-ошибок + последняя (Direction/ErrorWord).
-                   * Response: [2..5]=err_count [6..9]=last_ErrorWord [10]=last_Direction */
-        extern volatile u32 g_gem_err_count, g_gem_err_last_word;
-        extern volatile u8  g_gem_err_last_dir;
-        struct pbuf *pb = resp_alloc(0x4B, 11);
-        if (!pb) break;
-        uint8_t *d = (uint8_t *)pb->payload;
-      //  put_le32(d + 2, g_gem_err_count);
-       // put_le32(d + 6, g_gem_err_last_word);
-       // d[10] = g_gem_err_last_dir;
-        resp_send(upcb, pb, addr, port);
-        break;
-    }
-
-    case 0x4C: {  /* WDT вкл/выкл (тумблер).
-                   *   len=2: GET. len=3: SET (payload[2]: 0=выкл, иначе вкл).
-                   * Response: [2] = текущее состояние (1=включён). */
-        if (len >= 3) {
-            wdt_set_enabled(data[2] ? 1 : 0);
-        }
+    case 0x4C: {  /* WDT вкл/выкл. len=2 GET / len=3 SET (payload[2]: 0=выкл).
+                   * Response [2]=состояние (1=включён). */
+        if (len >= 3) wdt_set_enabled(data[2] ? 1 : 0);
         struct pbuf *pb = resp_alloc(0x4C, 3);
         if (!pb) break;
         ((uint8_t *)pb->payload)[2] = (uint8_t)wdt_is_enabled();
         resp_send(upcb, pb, addr, port);
-        LOG1("[CMD 0x4C] WDT %s\r\n", wdt_is_enabled() ? "ON" : "OFF");
         break;
     }
 
@@ -1130,11 +910,7 @@ void send_modem_status(struct udp_pcb *upcb, struct stat_modem* status)
      err_t out = udp_sendto(upcb, p, &ppos.status_ip, ppos.status_port);
 
      if (out != ERR_OK) {
-         /* ERR_MEM (-1) тут = lwIP без pbuf'ов под нагрузкой (backpressure
-          * GEM-TX). Раньше печаталось безусловно и флудило UART в hot-ish path
-          * (раз в ~5с, но десятки секунд подряд) — гейтим уровнем лога.
-          * Сам факт виден в 0x20: mem_err / pool_err. */
-         LOG1("Error udp_sendto status: %d\n\r", out);
+         xil_printf("Error udp_sendto debug_pcb: %d\n\r", out);
      }
 
      pbuf_free(p);

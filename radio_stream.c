@@ -5,10 +5,7 @@
 #include <string.h>
 #include <stdbool.h>
 #include "modem.h"
-#include "watchdog.h"
-#include "cmd_udp.h"   /* для g_log_level / LOG_HOT */
-#include "xtime_l.h"        /* XTime для рейт-капа radio TX */
-#include "platform_config.h"  /* RADIO_TX_CAP_BPS_DEFAULT */
+#include "watchdog.h"   /* wdt_progress_kick — робастность WDT под нагрузкой */
 
 extern struct netif port3_bridge;
 
@@ -61,18 +58,6 @@ static u32 dbg_err_pkt_gap = 0;   // РџСЂРѕРїСѓСЃРєРё packet ID 
 static int crc_dump_done = 0;     // Р¤Р»Р°Рі РґР»СЏ РѕРґРЅРѕРєСЂР°С‚РЅРѕРіРѕ РґР°РјРїР° CRC-РѕС€РёР±РєРё
 static u32 dbg_err_tx_stall = 0;  // tx_process РїСЂРµСЂРІР°Р»СЃСЏ (TX FIFO РїРѕР»РѕРЅ)
 static u32 dbg_err_tx_reject = 0; // РџР°РєРµС‚ РѕС‚Р±СЂРѕС€РµРЅ (tx_ring РїРѕР»РѕРЅ)
-static u32 dbg_err_tx_ratecap = 0; // Пакет отброшен рейт-капом (A: защита master)
-
-/* === A: рейт-кап radio TX ===
- * Держим поток в радио ниже триггера лок-апа GEM-RX на приёмнике (master виснет
- * под 1.5M+ — лок-ап драйвера GEM Zynq-7000, см. docs/wdt_robustness_report.md).
- * Кап в БИТАХ/с по ethernet-данным пакета; 0 = выключен. Тюнится по UDP 0x90 0x4A.
- * Token-bucket: дёшево дропаем ДО дорогой работы, если радио-поток превысил кап. */
-volatile uint32_t g_radio_tx_cap_bps = RADIO_TX_CAP_BPS_DEFAULT;
-static XTime   tb_last_time = 0;
-static int64_t tb_tokens    = 0;   // доступные байты
-
-uint32_t radio_get_tx_ratecap_drops(void) { return dbg_err_tx_ratecap; }
 
 // RX РџР°СЂСЃРµСЂ
 typedef enum {
@@ -235,7 +220,7 @@ if (ReceiveLength==54)
 
 	else
 		{
-			LOG_HOT("fifo_rx_len=%d\n\r", ReceiveLength);
+			xil_printf("fifo_rx_len=%d\n\r", ReceiveLength);
 			for (int i=0; i < ReceiveLength; i++)  RxWord = XLlFifo_RxGetWord(&fifo);
 		}
 
@@ -306,7 +291,6 @@ static void send_block_to_pl(uint8_t *block) {
         XLlFifo_iTxSetLen(&fifo, byt);
 
         dbg_tx_blocks++;
-        wdt_hb_tx();
     } else {
         dbg_err_fifo_full++;
     }
@@ -378,39 +362,11 @@ void tx_process() {
 
 err_t radio_linkoutput(struct netif *netif, struct pbuf *p) {
 
-    /* Сюда попадаем по цепочке xemacif_input → bridgeif → vport3_linkoutput.
-     * Если main loop здесь подвиснет — crash_section покажет RADIO_TX вместо
-     * расплывчатого LWIP_INPUT. */
+    /* Робастность WDT: пока пакеты реально текут через radio path — это прогресс,
+     * не hang. Кикаем WDT (троттл внутри), чтобы под нагрузкой не было ложных
+     * ребутов. ДО drop-проверки — поток дропаемых пакетов тоже держит таймер. */
     wdt_section_mark(WDT_SEC_RADIO_TX);
-
-    /* Робастность под перегрузкой: xemacif_input может за один вызов разгребать
-     * большой GEM-RX backlog и не возвращаться в main loop секундами, где живёт
-     * единственный wdt_kick(). Кикаем WDT прямо отсюда (троттлингом) — пока
-     * пакеты реально текут через radio path, это прогресс, а не hang. Ставим
-     * ДО drop-проверки, чтобы поток дропаемых пакетов тоже держал таймер. */
     wdt_progress_kick();
-
-    /* A: рейт-кап radio TX (token-bucket). Дропаем дёшево, если поток в радио
-     * превысил g_radio_tx_cap_bps — чтобы master не получал поток, на котором
-     * ловит лок-ап GEM-RX. 0 = выключен. */
-    if (g_radio_tx_cap_bps > 0) {
-        XTime _now;
-        XTime_GetTime(&_now);
-        if (tb_last_time == 0) tb_last_time = _now;
-        uint64_t _el = (uint64_t)(_now - tb_last_time);
-        int64_t  _add = (int64_t)(((uint64_t)g_radio_tx_cap_bps / 8ULL) * _el / COUNTS_PER_SECOND);
-        if (_add > 0) {
-            int64_t _burst = (int64_t)((uint64_t)g_radio_tx_cap_bps / 8ULL / 10ULL); /* ~100мс */
-            tb_tokens += _add;
-            if (tb_tokens > _burst) tb_tokens = _burst;
-            tb_last_time = _now;   /* обновляем только при реальном пополнении — без потери дробных токенов */
-        }
-        if (tb_tokens < (int64_t)p->tot_len) {
-            dbg_err_tx_ratecap++;
-            return ERR_MEM;
-        }
-        tb_tokens -= (int64_t)p->tot_len;
-    }
 
     if ((RING_SIZE - tx_count) < (p->tot_len + 10)) {
         dbg_err_tx_reject++;
@@ -481,7 +437,6 @@ void radio_poll(void) {
 
 void radio_input_block(uint8_t *block_188, struct netif *inp_netif) {
     dbg_rx_blocks++;
-    wdt_hb_rx();
 
     uint8_t seq = block_188[0];
     if (!rx_first_block_seen) {
@@ -695,37 +650,6 @@ void radio_stream_get_stats(radio_stats_t *out) {
 void radio_stream_reset_rx_ids(void) {
     rx_first_block_seen = 0;
     rx_first_pkt_seen   = 0;
-}
-
-/* ===================================================================
- *  Recovery handlers
- *  ------------------------------------------------------------------
- *  Локальный "soft restart" одной из сторон radio path без PS reset.
- *  Чистит:
- *    - соответствующую сторону AXI FIFO (TX или RX)
- *    - software state (ring, parser state, counters)
- *  Stats-счётчики ошибок НЕ обнуляются — они нужны для диагностики
- *  частоты срабатываний recovery.
- * =================================================================== */
-void radio_recover_tx(void) {
-    XLlFifo_TxReset(&fifo);
-    tx_head = tx_tail = tx_count = 0;
-    global_tx_pkt_counter = 0;
-    global_tx_seq_counter = 0;
-    xil_printf("[RECOV] radio_tx: FIFO TX reset + ring/counters cleared\r\n");
-}
-
-void radio_recover_rx(void) {
-    XLlFifo_RxReset(&fifo);
-    rx_head = rx_tail = rx_count = 0;
-    rx_state = ST_MAGIC_H;
-    rx_pkt_len = 0;
-    rx_pkt_received = 0;
-    rx_calc_crc = 0;
-    rx_recv_crc = 0;
-    rx_first_block_seen = 0;
-    rx_first_pkt_seen = 0;
-    xil_printf("[RECOV] radio_rx: FIFO RX reset + parser state cleared\r\n");
 }
 
 void radio_stream_set_loopback(int enable) {    loopback_enabled = enable;

@@ -31,8 +31,7 @@
 #ifndef BRIDGE_FUNC_H_
 #define BRIDGE_FUNC_H_
 
-/* DEB_FUNC удалён — отладка ethernet-трафика теперь runtime через
- * g_log_level >= 3 (см. cmd_udp.h). Включается командой 0x90 0x46. */
+#define DEB_FUNC  0
 
 #ifdef IS_MASTER
 static const bridgeif_initdata_t bridge_data =
@@ -81,12 +80,6 @@ typedef struct {
 void print_dynamic_fdb(struct netif *bridgeif);
 
 void* bridgeif_get_dynamic_fdb(struct netif *bridgeif);
-
-/* Recovery handler — чистит dynamic FDB у bridge_netif.
- * Используется когда MAC-learning bridgeif "запутался" и пакеты
- * перестали ходить (или пошли не туда). Static-entries остаются.
- * Возвращает количество очищенных entries. */
-u16_t bridge_recover_lwip(void);
 
 err_t vport2_init(struct netif *netif);
 err_t vport2_linkoutput(struct netif *netif, struct pbuf *p);

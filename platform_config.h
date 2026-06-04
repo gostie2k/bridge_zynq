@@ -21,7 +21,11 @@
 #define FIFO_DEB_DEV_BASE_ADDR XPAR_AXI_FIFO_MM_S_1_BASEADDR
 
 
+
 #define BRIDGE 1
+
+//#define IS_BORT 1
+
 //#define IS_MASTER 1
 //#define IS_OLD_PAR 1
 #define IS_SLAVE 1
@@ -46,42 +50,9 @@
 
 
 /* ===================================================================
- *  Firmware version / role indication
- *  ------------------------------------------------------------------
- *  Чтобы исключить «а тот ли билд залит» — версия и роль выводятся:
- *    - по UART баннером при старте (см. main.c после knk_init_platform);
- *    - по Ethernet командой 0x90 0x48 (см. cmd_udp.c).
- *  ВНИМАНИЕ: __DATE__/__TIME__ в FW_BUILD_STR отражают время компиляции
- *  cmd_udp.c (где раскрывается макрос), а НЕ всего образа. При инкрементальной
- *  сборке Vitis, если cmd_udp.c не менялся, таймстамп ОСТАЁТСЯ СТАРЫМ даже после
- *  правки других файлов → по таймстампу судить о билде НЕЛЬЗЯ.
- *  Надёжный признак — строка FW_VERSION: бампай её при КАЖДОМ значимом
- *  изменении (смена platform_config.h форсит пересборку cmd_udp.c → 0x48 отдаёт
- *  новую строку). Роль выводится из IS_MASTER/IS_SLAVE автоматически.
- *    r1 = slave-kick (radio_linkoutput)
- *    r2 = + master-kick (bridgeif_fdb_update_src)
- *    r3 = + инструментация (0x49: xemacif длительность, счётчик kick)
- *    r4 = + рейт-кап radio TX (A: держим master ниже триггера лок-апа GEM-RX)
- *    r5 = кап-дефолт 1.2M→1.0M (1.2M на стенде ещё ронял master; 1.0M держит 8+ мин)
- *    r6 = DIAG (B): счётчик GEM-ошибок 0x4B (+ врезка в BSP xemacpsif_hw.c)
- *    r7 = DIAG (B): кап ВЫКЛ по дефолту, чтобы мастер свободно виснул и ловить
- *         0x4B. ВРЕМЕННО — после фикса B вернуть RADIO_TX_CAP_BPS_DEFAULT=1000000u
- *    r8 = DIAG (B): section-маркер в process_sent_bds (TX-done ISR) → crash_section=12.
- *         РЕЗУЛЬТАТ: фриз дал crash_section=1(LWIP_INPUT), НЕ 12 → process_sent_bds исключён.
- *    r9 = DIAG (B) итерация 2: маркеры в low_level_output(10), netif->input/мост(7),
- *         emacps_recv_handler RX-ISR(8). Следующий фриз сузит место. Кап ВЫКЛ.
- *    r10 = ★ ФИКС B: SPI RSSI/gain вынесен из GPIO-ISR (IntrHandler) в main loop
- *          (по флагу is_pow_rx). Корень фриза master = блокирующий SPI busy-wait
- *          в прерывании. Кап ВЫКЛ (корень чинится по-настоящему, троттл не нужен).
- *    r11 = WDT-тумблер: вкл/выкл по UDP 0x90 0x4C, дефолт WDT_ENABLED_DEFAULT.
- *          Финальная форма WDT перед мержем. */
+ *  Firmware version / role + WDT default (мерж WDT-стабильности)
+ * =================================================================== */
 #define FW_VERSION   "wdt-robust-r11"
-
-/* A: дефолтный кап radio TX в битах/с по ethernet-данным (0 = выключен).
- * Рабочее значение — 1000000u (master стабилен 8+ мин под 2M). СЕЙЧАС 0 (выкл)
- * для диагностики B: мастер должен свободно виснуть, чтобы ловить причину по 0x4B.
- * Тюнится в рантайме по UDP 0x90 0x4A. ВЕРНУТЬ 1000000u после фикса B! */
-#define RADIO_TX_CAP_BPS_DEFAULT  0u
 
 #if defined(IS_MASTER) && !defined(IS_SLAVE)
   #define FW_ROLE_STR "MASTER"
@@ -90,12 +61,16 @@
   #define FW_ROLE_STR "SLAVE"
   #define FW_ROLE_ID  2u
 #else
-  /* Ни одна или обе роли определены — это мисконфиг, явно сигналим. */
   #define FW_ROLE_STR "ROLE?!"
   #define FW_ROLE_ID  0u
 #endif
 
 #define FW_BUILD_STR  FW_VERSION " " FW_ROLE_STR " (" __DATE__ " " __TIME__ ")"
+
+/* WDT включён по умолчанию (1=боевой). Рантайм-тумблер — UDP 0x90 0x4C. */
+#ifndef WDT_ENABLED_DEFAULT
+#define WDT_ENABLED_DEFAULT  1
+#endif
 
 
 #endif

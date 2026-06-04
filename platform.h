@@ -13,6 +13,7 @@
 #include "xuartps.h"
 #include "xgpiops.h"
 #include "xscugic.h"
+
 #include "xil_exception.h"
 //#include "xqspips.h"
 //#include "Xscugic.h"
@@ -37,13 +38,18 @@
 
 
 
-void knk_init_platform(XUartPs* ptr_uart1_ps, XGpioPs* ptr_gpio_ps, XScuGic* ptr_scugic, XGpioPs_Handler FuncPointer);
+void knk_init_platform(XUartPs* ptr_uart1_ps, XGpioPs* ptr_gpio_ps);
 s32 init_uart1(XUartPs* ptr_uart_ps);
 s32 init_gpio(XGpioPs* ptr_gpio_ps);
-s32 init_ScuGic(XScuGic* ptr_scugic, XGpioPs* ptr_gpio_ps, XGpioPs_Handler FuncPointer);
+
+
+
+
+
 //void cleanup_platform();
 
 void platform_setup_timer();
 void platform_enable_interrupts();
+int platform_setup_interrupts(XScuGic* ptr_scugic, XGpioPs* ptr_gpio_ps,  XGpioPs_Handler FuncPointer);
 
 #endif

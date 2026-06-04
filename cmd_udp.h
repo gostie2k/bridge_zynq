@@ -1,30 +1,47 @@
+//#pragma once
+//
+//#include "lwip/udp.h"
+//#include "lwip/ip_addr.h"
+//
+//// UDP-обработчик команд протокола 0x90
+//// Регистрировать через: udp_recv(cmd_udp_pcb, cmd_udp_callback, NULL);
+//void cmd_udp_callback(void *arg, struct udp_pcb *upcb,
+//                      struct pbuf *p, const ip_addr_t *addr, u16_t port);
 #pragma once
 
 #include "lwip/udp.h"
 #include "lwip/ip_addr.h"
 #include "xil_printf.h"
 #include "axi_cntrl_reg/axi_cntrl_reg.h"
+#include "modem.h"
 
 /* ===================================================================
- * Log debug level (runtime, можно менять на ходу через 0x90 0x46):
+ * Log debug level:
  *   0 = silent (no logs)
  *   1 = basic events (packet rx, errors)
  *   2 = verbose (+ hex-dump, register values)
- *   3 = hot-path trace (включает LOG_HOT в radio_stream/bridge_func и т.п.)
- *
- * Дефолтное значение задаётся LOG_DEBUG_DEFAULT (или 2 если не определено).
  * =================================================================== */
-#ifndef LOG_DEBUG_DEFAULT
-#define LOG_DEBUG_DEFAULT  0
+#ifndef LOG_DEBUG
+#define LOG_DEBUG  2
 #endif
 
-extern volatile int g_log_level;
+#if LOG_DEBUG >= 1
+  #define LOG1(fmt, ...)  xil_printf(fmt, ##__VA_ARGS__)
+#else
+  #define LOG1(fmt, ...)  ((void)0)
+#endif
 
-#define LOG1(fmt, ...)  do { if (g_log_level >= 1) xil_printf(fmt, ##__VA_ARGS__); } while (0)
-#define LOG2(fmt, ...)  do { if (g_log_level >= 2) xil_printf(fmt, ##__VA_ARGS__); } while (0)
-#define LOG_HOT(fmt, ...)  do { if (g_log_level >= 3) xil_printf(fmt, ##__VA_ARGS__); } while (0)
+#if LOG_DEBUG >= 2
+  #define LOG2(fmt, ...)  xil_printf(fmt, ##__VA_ARGS__)
+#else
+  #define LOG2(fmt, ...)  ((void)0)
+#endif
 
-/* UDP command handler: dispatches 0xA0 (cregs), 0x90 (legacy proto),
- * and ucnt-prefixed legacy commands (firewall, IP). */
+/* UDP command handler (protocol 0x90 + legacy ucnt protocol) */
 void cmd_udp_callback(void *arg, struct udp_pcb *upcb,
                       struct pbuf *p, const ip_addr_t *addr, u16_t port);
+
+static void handle_creg_exch(struct udp_pcb *upcb, uint8_t *data,
+                          uint16_t len, const ip_addr_t *addr, u16_t port);
+
+void send_modem_status(struct udp_pcb *upcb, struct stat_modem* status);

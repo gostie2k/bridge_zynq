@@ -114,33 +114,113 @@ void platform_setup_timer(void)
 	return;
 }
 
-void platform_setup_interrupts(void)
+int platform_setup_interrupts(XScuGic* ptr_scugic, XGpioPs* ptr_gpio_ps,  XGpioPs_Handler FuncPointer)
 {
 	Xil_ExceptionInit();
 
-	XScuGic_DeviceInitialize(INTC_DEVICE_ID);
+	//XScuGic_DeviceInitialize(INTC_DEVICE_ID);
+
+	XScuGic_Config *IntcConfig;
+	int Status;
+
+	IntcConfig = XScuGic_LookupConfig(INTC_DEVICE_ID);
+			if (NULL == IntcConfig) {
+				return XST_FAILURE;
+			}
+    Status = XScuGic_CfgInitialize(ptr_scugic, IntcConfig, IntcConfig->CpuBaseAddress);
+			if (Status != XST_SUCCESS) {
+				return XST_FAILURE;
+			}
+
 
 	/*
 	 * Connect the interrupt controller interrupt handler to the hardware
 	 * interrupt handling logic in the processor.
 	 */
-	Xil_ExceptionRegisterHandler(XIL_EXCEPTION_ID_IRQ_INT,
-			(Xil_ExceptionHandler)XScuGic_DeviceInterruptHandler,
-			(void *)INTC_DEVICE_ID);
+	//Xil_ExceptionRegisterHandler(XIL_EXCEPTION_ID_IRQ_INT,
+	//		(Xil_ExceptionHandler)XScuGic_DeviceInterruptHandler,
+	//		(void *)INTC_DEVICE_ID);
+
+	Xil_ExceptionRegisterHandler(XIL_EXCEPTION_ID_INT, (Xil_ExceptionHandler)XScuGic_InterruptHandler,  ptr_scugic);
+
 	/*
 	 * Connect the device driver handler that will be called when an
 	 * interrupt for the device occurs, the handler defined above performs
 	 * the specific interrupt processing for the device.
 	 */
-	XScuGic_RegisterHandler(INTC_BASE_ADDR, TIMER_IRPT_INTR,
-					(Xil_ExceptionHandler)timer_callback,
-					(void *)&TimerInstance);
-	/*
+
+
+	Status = XScuGic_Connect(ptr_scugic, GPIO_INTERRUPT_ID,(Xil_ExceptionHandler)XGpioPs_IntrHandler,(void *) ptr_gpio_ps);
+		if (Status != XST_SUCCESS) {
+			return Status;
+		}
+
+
+    XGpioPs_SetCallbackHandler((XGpioPs*) ptr_gpio_ps, (void *) ptr_gpio_ps, FuncPointer);
+
+	//st_mod
+	//XGpioPs_IntrEnablePin(ptr_gpio_ps, 54+63);
+	//XGpioPs_SetIntrTypePin(ptr_gpio_ps, 54+63, XGPIOPS_IRQ_TYPE_EDGE_RISING);
+
+		//rx_pkt_int
+	XGpioPs_SetIntrTypePin(ptr_gpio_ps, 54+61, XGPIOPS_IRQ_TYPE_EDGE_RISING);
+	XGpioPs_IntrEnablePin(ptr_gpio_ps, 54+61);
+
+
+	//tx_cntrl_int
+    //XGpioPs_IntrEnablePin(ptr_gpio_ps, 54+60);
+    //XGpioPs_SetIntrTypePin(ptr_gpio_ps, 54+60, XGPIOPS_IRQ_TYPE_EDGE_RISING);
+
+
+	//tx_cntrl_end_int
+    //XGpioPs_IntrEnablePin(ptr_gpio_ps, 54+59);
+    //XGpioPs_SetIntrTypePin(ptr_gpio_ps, 54+59, XGPIOPS_IRQ_TYPE_EDGE_RISING);
+
+
+	/* Enable the interrupt for the GPIO device. */
+	XScuGic_Enable(ptr_scugic, GPIO_INTERRUPT_ID);
+
+
+//timer int
+
+    Status = XScuGic_Connect(ptr_scugic, TIMER_IRPT_INTR,
+	                             (Xil_ExceptionHandler)timer_callback,
+	                             (void *)&TimerInstance);
+    if (Status != XST_SUCCESS) {
+	        return Status;
+	    }
+
+
+
+//	XScuGic_RegisterHandler(INTC_BASE_ADDR, TIMER_IRPT_INTR,
+//				(Xil_ExceptionHandler)timer_callback,
+//					(void *)&TimerInstance);
+
+
+
+	    /*
 	 * Enable the interrupt for scu timer.
 	 */
-	XScuGic_EnableIntr(INTC_DIST_BASE_ADDR, TIMER_IRPT_INTR);
+	//XScuGic_EnableIntr(INTC_DIST_BASE_ADDR, TIMER_IRPT_INTR);
+	XScuGic_Enable(ptr_scugic, TIMER_IRPT_INTR);
 
-	return;
+
+	//Xil_ExceptionEnableMask(XIL_EXCEPTION_IRQ);
+
+
+
+	 // Назначаем таймеру максимальный приоритет (например, 0x08)
+	    // 0x3 означает, что прерывание срабатывает по высокому уровню (High Level)
+	  //  XScuGic_SetPriorityTriggerType(ptr_scugic, TIMER_IRPT_INTR, 0x08, 0x3);
+
+	    // Назначаем GPIO более низкий приоритет (например, 0xA0)
+	    // 0x1 означает, что прерывание срабатывает по нарастающему фронту (Rising Edge)
+	  //  XScuGic_SetPriorityTriggerType(ptr_scugic, GPIO_INTERRUPT_ID, 0xA0, 0x1);
+
+
+
+
+	return XST_SUCCESS;
 }
 
 void platform_enable_interrupts()
@@ -149,22 +229,22 @@ void platform_enable_interrupts()
 	 * Enable non-critical exceptions.
 	 */
 	Xil_ExceptionEnableMask(XIL_EXCEPTION_IRQ);
-	XScuTimer_EnableInterrupt(& TimerInstance);
+	XScuTimer_EnableInterrupt(&TimerInstance);
 	XScuTimer_Start(&TimerInstance);
 	return;
 }
 
-void init_platform()
-{
-	Xil_ICacheEnable();
-	Xil_DCacheEnable();
+//void init_platform()
+//{
+//	Xil_ICacheEnable();
+//	Xil_DCacheEnable();
 
 
-	platform_setup_timer();
-	platform_setup_interrupts();
+//	platform_setup_timer();
+//	platform_setup_interrupts();
 
-	return;
-}
+//	return;
+//}
 
 void cleanup_platform()
 {

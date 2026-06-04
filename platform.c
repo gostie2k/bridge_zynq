@@ -115,88 +115,10 @@ s32 init_gpio(XGpioPs* ptr_gpio_ps)
 	    return XST_SUCCESS ;
 }
 
-s32 init_ScuGic(XScuGic* ptr_scugic, XGpioPs* ptr_gpio_ps,  XGpioPs_Handler FuncPointer)
-{
-
-	//GIC config
-	XScuGic_Config *IntcConfig;
-	Xil_ExceptionInit();
-	//initialize the GIC
-	IntcConfig = XScuGic_LookupConfig(INTC_DEVICE_ID);
-		if (NULL == IntcConfig) {
-			return XST_FAILURE;
-		}
-	Status = XScuGic_CfgInitialize(ptr_scugic, IntcConfig, IntcConfig->CpuBaseAddress);
-		if (Status != XST_SUCCESS) {
-			return XST_FAILURE;
-		}
-
-		/*
-		 * Connect the interrupt controller interrupt handler to the hardware
-		 * interrupt handling logic in the processor.
-		 */
-	Xil_ExceptionRegisterHandler(XIL_EXCEPTION_ID_INT, (Xil_ExceptionHandler)XScuGic_InterruptHandler,  ptr_scugic);
-
-		/*
-		 * Connect the device driver handler that will be called when an
-		 * interrupt for the device occurs, the handler defined above performs
-		 * the specific interrupt processing for the device.
-		 */
-
-	Status = XScuGic_Connect(ptr_scugic, GPIO_INTERRUPT_ID,(Xil_ExceptionHandler)XGpioPs_IntrHandler,(void *) ptr_gpio_ps);
-		if (Status != XST_SUCCESS) {
-			return Status;
-		}
-
-
-	//st_mod
-	XGpioPs_IntrEnablePin(ptr_gpio_ps, 54+63);
-	XGpioPs_SetIntrTypePin(ptr_gpio_ps, 54+63, XGPIOPS_IRQ_TYPE_EDGE_RISING);
-
-		//rx_pkt_int
-	XGpioPs_IntrEnablePin(ptr_gpio_ps, 54+61);
-	XGpioPs_SetIntrTypePin(ptr_gpio_ps, 54+61, XGPIOPS_IRQ_TYPE_EDGE_RISING);
-
-	//tx_cntrl_int
-    XGpioPs_IntrEnablePin(ptr_gpio_ps, 54+60);
-    XGpioPs_SetIntrTypePin(ptr_gpio_ps, 54+60, XGPIOPS_IRQ_TYPE_EDGE_RISING);
-
-
-	//tx_cntrl_end_int
-    XGpioPs_IntrEnablePin(ptr_gpio_ps, 54+59);
-    XGpioPs_SetIntrTypePin(ptr_gpio_ps, 54+59, XGPIOPS_IRQ_TYPE_EDGE_RISING);
 
 
 
-
-
-	XGpioPs_SetCallbackHandler((XGpioPs*) ptr_gpio_ps, (void *) ptr_gpio_ps, FuncPointer);
-
-
-
-
-
-
-
-
-	/* Enable the interrupt for the GPIO device. */
-	XScuGic_Enable(ptr_scugic, GPIO_INTERRUPT_ID);
-
-
-	/*
-		 * Enable the interrupt for scu timer.
-		 */
-   //XScuGic_EnableIntr(INTC_DIST_BASE_ADDR, TIMER_IRPT_INTR);
-
-
-	/* Enable interrupts in the Processor. */
-	Xil_ExceptionEnableMask(XIL_EXCEPTION_IRQ);
-
-	return XST_SUCCESS ;
-}
-
-
-void knk_init_platform(XUartPs* ptr_uart1_ps, XGpioPs* ptr_gpio_ps, XScuGic* ptr_scugic, XGpioPs_Handler FuncPointer)
+void knk_init_platform(XUartPs* ptr_uart1_ps, XGpioPs* ptr_gpio_ps)
 {
     /*
      * If you want to run this example outside of SDK,
@@ -210,7 +132,7 @@ void knk_init_platform(XUartPs* ptr_uart1_ps, XGpioPs* ptr_gpio_ps, XScuGic* ptr
     //enable_caches();
     init_uart1(ptr_uart1_ps);
     init_gpio(ptr_gpio_ps);
-    init_ScuGic(ptr_scugic, ptr_gpio_ps, FuncPointer);
+
 }
 
 

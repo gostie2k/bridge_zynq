@@ -35,7 +35,7 @@
 significant delays */
 //#define DEBUG_LEVEL 2
 #include "spi_engine.h"
-#include "../modem.h"
+
 #ifndef USE_STANDARD_SPI
 #include <stdbool.h>
 #include <stdint.h>
@@ -49,7 +49,6 @@ significant delays */
 #include "../ad9361/no_os_error.h"
 #include "../ad9361/no_os_alloc.h"
 #include "../ad9361/no_os_util.h"
-#include "xil_printf.h"
 
 /**
  * @brief Spi engine platform specific SPI platform ops structure
@@ -675,8 +674,6 @@ int32_t spi_engine_init(struct no_os_spi_desc **desc,
 	return 0;
 }
 
-
-
 /**
  * @brief Write/read on the spi interface
  *
@@ -687,74 +684,65 @@ int32_t spi_engine_init(struct no_os_spi_desc **desc,
  *		   - -1 if the memory allocation or transfer failed
  */
 int32_t spi_engine_write_and_read(struct no_os_spi_desc *desc,
-                                  uint8_t *data,
-                                  uint16_t bytes_number)
+				  uint8_t *data,
+				  uint16_t bytes_number)
 {
-    uint8_t                 i;
-    uint8_t                 word_len;
-    uint8_t                 words_number;
-    int32_t                 ret;
-    struct spi_engine_msg   msg;
-    struct spi_engine_desc  *desc_extra;
+	uint8_t 		i;
+	uint8_t 		word_len;
+	uint8_t 		words_number;
+	int32_t 		ret;
+	struct spi_engine_msg	msg;
+	struct spi_engine_desc	*desc_extra;
 
-    /* Сохраняем TX до transfer (data[] будет перезаписан RX) */
-    uint8_t tx_copy[32];
-    int can_log = (bytes_number <= sizeof(tx_copy));
-    if (can_log) {
-        for (i = 0; i < bytes_number; i++)
-            tx_copy[i] = data[i];
-    }
+	desc_extra = desc->extra;
 
-    desc_extra = desc->extra;
+	/* If we want to access SPI interface and SPI engine offload module was
+	 * activated, we need to disable it
+	 * This is set in spi_engine_offload_init() */
+	desc_extra->offload_config = OFFLOAD_DISABLED;
+	/* This is set in spi_engine_offload_transfer() */
+	spi_engine_write(desc_extra, SPI_ENGINE_REG_OFFLOAD_CTRL(0), 0);
 
-    desc_extra->offload_config = OFFLOAD_DISABLED;
-    spi_engine_write(desc_extra, SPI_ENGINE_REG_OFFLOAD_CTRL(0), 0);
+	words_number = spi_get_words_number(desc_extra, bytes_number);
 
-    words_number = spi_get_words_number(desc_extra, bytes_number);
+	msg.cmds = (spi_engine_cmd_queue*)no_os_malloc(sizeof(*msg.cmds));
+	if (!msg.cmds)
+		return -1;
 
-    msg.cmds = (spi_engine_cmd_queue*)no_os_malloc(sizeof(*msg.cmds));
-    if (!msg.cmds)
-        return -1;
+	msg.tx_buf = (uint32_t*)no_os_calloc(words_number, sizeof(msg.tx_buf[0]));
+	msg.rx_buf = (uint32_t*)no_os_calloc(words_number, sizeof(msg.rx_buf[0]));
+	msg.length = words_number;
 
-    msg.tx_buf = (uint32_t*)no_os_calloc(words_number, sizeof(msg.tx_buf[0]));
-    msg.rx_buf = (uint32_t*)no_os_calloc(words_number, sizeof(msg.rx_buf[0]));
-    msg.length = words_number;
+	/* Get the length of transfered word */
+	word_len = spi_get_word_lenght(desc_extra);
 
-    word_len = spi_get_word_lenght(desc_extra);
+	/* Make sure the CS is HIGH before starting a transaction */
+	msg.cmds->next = NULL;
+	msg.cmds->cmd = CS_HIGH;
+	spi_engine_queue_add_cmd(&msg.cmds, CS_LOW);
+	spi_engine_queue_add_cmd(&msg.cmds, WRITE_READ(bytes_number));
 
-    msg.cmds->next = NULL;
-    msg.cmds->cmd = CS_HIGH;
-    spi_engine_queue_add_cmd(&msg.cmds, CS_LOW);
-    spi_engine_queue_add_cmd(&msg.cmds, WRITE_READ(bytes_number));
-    spi_engine_queue_add_cmd(&msg.cmds, CS_HIGH);
 
-    for (i = 0; i < bytes_number; i++)
-        msg.tx_buf[i / word_len] |= data[i] << (desc_extra->data_width -
-                                                (i % word_len + 1) * 8);
 
-    ret = spi_engine_transfer_message(desc, &msg);
+	spi_engine_queue_add_cmd(&msg.cmds, CS_HIGH);
 
-    for (i = 0; i < bytes_number; i++)
-        data[i] = msg.rx_buf[(i) / word_len] >>
-                  (desc_extra->data_width -
-                   ((i) % word_len + 1) * 8);
+	/* Pack the bytes into engine WORDS */
+	for (i = 0; i < bytes_number; i++)
+		msg.tx_buf[i / word_len] |= data[i] << (desc_extra->data_width -
+							(i % word_len + 1) * 8);
 
-    /* === Лог только для NPU SPI Engine (MAX7301), не для AD9361 === */
-    if (can_log && desc_extra->spi_engine_baseaddr == SPI_ENGINE_NPU_BASEADDR) {
-        xil_printf("[SPI CS%u] TX:", (unsigned)desc->chip_select);
-        for (i = 0; i < bytes_number; i++)
-            xil_printf(" %02X", tx_copy[i]);
-        xil_printf("  RX:");
-        for (i = 0; i < bytes_number; i++)
-            xil_printf(" %02X", data[i]);
-        xil_printf("\r\n");
-    }
+	ret = spi_engine_transfer_message(desc, &msg);
 
-    spi_engine_queue_no_os_free(&msg.cmds);
-    no_os_free(msg.tx_buf);
-    no_os_free(msg.rx_buf);
+	for (i = 0; i < bytes_number; i++)
+		data[i] = msg.rx_buf[(i) / word_len] >>
+			  (desc_extra->data_width -
+			   ((i) % word_len + 1) * 8);
 
-    return ret;
+	spi_engine_queue_no_os_free(&msg.cmds);
+	no_os_free(msg.tx_buf);
+	no_os_free(msg.rx_buf);
+
+	return ret;
 }
 
 /**
