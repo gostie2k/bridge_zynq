@@ -25,6 +25,7 @@
 #include "netif/xadapter.h"
 #include "firewall.h"
 #include "modem.h"
+#include "device_config.h"
 
 
 
@@ -33,18 +34,9 @@
 
 #define DEB_FUNC  0
 
-#ifdef IS_MASTER
-static const bridgeif_initdata_t bridge_data =
-  BRIDGEIF_INITDATA1(5,//3
-		  1024, 16,
-    ETH_ADDR(0x00,0x1A,0x35,0xAA,0xBB,0xCE));
-#endif
-
-#ifdef IS_SLAVE
-static const bridgeif_initdata_t bridge_data =
-  BRIDGEIF_INITDATA1(5, 1024, 16,
-    ETH_ADDR(0x00,0x0A,0x35,0xAA,0xBB,0xCE));
-#endif
+/* bridge_data заполняется в рантайме из current_config (см. net_init).
+ * MAC внутри (ethaddr) выставляется перед netif_add. */
+extern bridgeif_initdata_t bridge_data;
 
 
 typedef struct {
@@ -59,19 +51,7 @@ typedef struct {
     bridgeif_fdb_dynamic_entry_t *fdb;
 } bridgeif_fdb_dynamic_t;
 
-#ifdef IS_MASTER
- static u8_t mac1[6] = {0x00,0x1A,0x35,0xAA,0xBB,0xCC};
- static u8_t mac2[6] = {0x00,0x1A,0x35,0xDD,0xEE,0x02};
- static u8_t mac3[6] = {0x00,0x1A,0x35,0xDD,0xEE,0x03};
- static u8_t mac4[6] = {0x00,0x1A,0x35,0xDD,0xEE,0x04};
-#endif
-
-#ifdef IS_SLAVE
- static u8_t mac1[6] = {0x00,0x0A,0x35,0xAA,0xBB,0xCC};
- static u8_t mac2[6] = {0x00,0x0A,0x35,0xDD,0xEE,0x02};
- static u8_t mac3[6] = {0x00,0x0A,0x35,0xDD,0xEE,0x03};
- static u8_t mac4[6] = {0x00,0x0A,0x35,0xDD,0xEE,0x04};
-#endif
+/* MAC'и (mac1=GEM, mac3=radio) теперь в current_config, заполняются в net_init. */
 
 
 

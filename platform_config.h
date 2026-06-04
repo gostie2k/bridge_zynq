@@ -69,7 +69,7 @@
 
 /* WDT включён по умолчанию (1=боевой). Рантайм-тумблер — UDP 0x90 0x4C. */
 #ifndef WDT_ENABLED_DEFAULT
-#define WDT_ENABLED_DEFAULT  1
+#define WDT_ENABLED_DEFAULT  0
 #endif
 
 

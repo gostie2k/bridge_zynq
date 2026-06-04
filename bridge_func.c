@@ -17,6 +17,10 @@ extern u16 deb_cnt_rf;
 extern struct ppos_tx tx_chan0;
 extern struct ppos_rx rx_chan0;
 
+/* MAC (ethaddr) РІС‹СЃС‚Р°РІР»СЏРµС‚СЃСЏ РёР· current_config.bridge_mac РІ net_init(). */
+bridgeif_initdata_t bridge_data =
+  BRIDGEIF_INITDATA1(5, 1024, 16, ETH_ADDR(0x00,0x00,0x00,0x00,0x00,0x00));
+
 #ifdef BRIDGE
 
 
@@ -93,7 +97,7 @@ err_t vport3_init(struct netif *netif) {
 
 
     netif->hwaddr_len = ETH_HWADDR_LEN;
-    memcpy(netif->hwaddr, mac3, ETH_HWADDR_LEN);
+    memcpy(netif->hwaddr, current_config.mac3, ETH_HWADDR_LEN);
     netif->flags = NETIF_FLAG_ETHARP | NETIF_FLAG_ETHERNET;
 
     		//NETIF_FLAG_BROADCAST
@@ -189,9 +193,9 @@ err_t vport3_linkoutput(struct netif *netif, struct pbuf *p) {
 
 //	 if (tx_seg_on)
 //	 {
-	    /* ===== СЕТЕВОЙ ЭКРАН: фильтрация перед отправкой в радиоканал ===== */
+	    /* ===== пїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅ: пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ ===== */
 	   // if (!firewall_filter(p, &bridge_netif)) {
-	        /* Пакет не прошёл фильтр — не отправляем в радио */
+	        /* пїЅпїЅпїЅпїЅпїЅ пїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅ пїЅ пїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅ пїЅпїЅпїЅпїЅпїЅ */
 	   //     return ERR_OK;
 	   // }
 //	    deb_cnt_rf++;
@@ -271,17 +275,15 @@ void net_init()
 {
     ip4_addr_t ipb, nmb, gwb, ip2, nm2, gw2;
 
+     /* IP/РјР°СЃРєР°/С€Р»СЋР· Рё MAC bridge'Р° вЂ” РёР· СЂР°РЅС‚Р°Р№Рј-РєРѕРЅС„РёРіР° */
+     IP4_ADDR(&ipb, current_config.ip[0], current_config.ip[1],
+                    current_config.ip[2], current_config.ip[3]);
+     IP4_ADDR(&nmb, current_config.netmask[0], current_config.netmask[1],
+                    current_config.netmask[2], current_config.netmask[3]);
+     IP4_ADDR(&gwb, current_config.gateway[0], current_config.gateway[1],
+                    current_config.gateway[2], current_config.gateway[3]);
 
-   #ifdef IS_MASTER
-     IP4_ADDR(&ipb, 192,168,250,11);
-   #endif
-   #ifdef IS_SLAVE
-     IP4_ADDR(&ipb, 192,168,250,21);
-   #endif
-
-
-     IP4_ADDR(&nmb, 255,255,255,0);
-     IP4_ADDR(&gwb, 192,168,250,1);
+     memcpy(bridge_data.ethaddr.addr, current_config.bridge_mac, 6);
 
      bridge_netif.state = (bridgeif_initdata_t *) &bridge_data;
 
@@ -308,7 +310,7 @@ void net_init()
 
      xemac_add(&port1_bridge,
                NULL, NULL, NULL,
-               mac1, PLATFORM_EMAC_BASEADDR);
+               current_config.mac1, PLATFORM_EMAC_BASEADDR);
 
      port1_bridge.flags|=NETIF_FLAG_ETHARP | NETIF_FLAG_ETHERNET;
 

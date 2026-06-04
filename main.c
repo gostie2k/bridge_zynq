@@ -1746,24 +1746,12 @@ modem_init();
 //platform_enable_interrupts();
 
 
-#ifdef IS_OLD_PAR
-#ifdef IS_MASTER
-    IP4_ADDR(&RemoteAddr, 169, 254, 206, 124);
-#endif
-#ifdef IS_SLAVE
-    IP4_ADDR(&RemoteAddr, 169, 254, 206, 224);
-#endif
-#endif
+    /* Сид рантайм-конфига из IS_MASTER/IS_SLAVE (Фаза 1 унификации).
+     * Должно быть до net_init() и до использования RemoteAddr. */
+    config_init_defaults_from_build();
 
-
-#ifndef IS_OLD_PAR
-#ifdef IS_MASTER
-    IP4_ADDR(&RemoteAddr, 192, 168, 250, 22);
-#endif
-#ifdef IS_SLAVE
-    IP4_ADDR(&RemoteAddr, 192, 168, 250, 10);
-#endif
-#endif
+    IP4_ADDR(&RemoteAddr, current_config.peer_ip[0], current_config.peer_ip[1],
+                          current_config.peer_ip[2], current_config.peer_ip[3]);
 
 firewall_init();
 lwip_init();
@@ -2426,11 +2414,7 @@ if (is_val)
 if (!is_val) xil_printf("! debug wrong: ReceiveLength =  %08x\n\r", ReceiveLength);
 
 
-#ifdef IS_MASTER
-
-if (is_val) send_deb();
-
-#endif
+if (is_val && current_config.role == ROLE_MASTER) send_deb();
 
 
 
