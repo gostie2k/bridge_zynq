@@ -1,0 +1,22 @@
+# Стиль форматирования прошивки PS-части модема ПКРВ.
+# Переотступ по вложенности (табы -> 4 пробела), без рефлоу длинных строк,
+# чтобы не ломать выровненные AXI-записи и построители пакетов.
+---
+Language:        Cpp
+BasedOnStyle:    LLVM
+IndentWidth:     4
+TabWidth:        4
+UseTab:          Never
+ColumnLimit:     0          # не переносить длинные строки, только переотступ
+BreakBeforeBraces: Attach   # K&R: скобка на той же строке
+IndentCaseLabels: true
+PointerAlignment: Right     # uint8_t *p
+AllowShortIfStatementsOnASingleLine: true   # сохранить компактные "if (x) break;"
+AllowShortBlocksOnASingleLine: Empty
+AllowShortFunctionsOnASingleLine: Empty
+AllowShortCaseLabelsOnASingleLine: false
+SpaceAfterCStyleCast: false
+KeepEmptyLinesAtTheStartOfBlocks: false
+MaxEmptyLinesToKeep: 1
+SortIncludes: false
+...
