@@ -31,6 +31,7 @@ extern struct no_os_spi_desc desc_tmp;
 extern struct ppos_tx tx_chan0;
 extern struct ppos_rx rx_chan0;
 extern struct ppos_par ppos;
+extern struct peleng pel; /* пеленг (правки коллеги) */
 
 /* ===================================================================
  *  Helpers
@@ -787,11 +788,11 @@ static void handle_creg_exch(struct udp_pcb *upcb, uint8_t *data,
     uint8_t type = data[3];
     LOG1("[CMD] 0xA0 group=0x%02X creg=0x%02X type=0x%02X len=%d\r\n", group, creg, type, len);
 
-    /* Группы 0..3 (cregs) читают 32-битное слово из data[4..7] — им нужно ровно
-     * 8 байт. Диспетчер пропускает 0xA0 с len>=4, поэтому короткий пакет отсекаем
-     * здесь, чтобы не читать за границей. Группа 4 (device) — переменной длины,
-     * свои проверки внутри. */
-    if (group <= 3 && len < 8) {
+    /* Группы 0..4 (cregs + пеленг) читают 32-битное слово из data[4..7] — им нужно
+     * ровно 8 байт. Диспетчер пропускает 0xA0 с len>=4, поэтому короткий пакет
+     * отсекаем здесь, чтобы не читать за границей. Группа 5 (device config) —
+     * переменной длины, свои проверки внутри. */
+    if (group <= 4 && len < 8) {
         LOG1("[CMD] 0xA0 g%d: too short (len=%d, need 8)\r\n", group, len);
         return;
     }
@@ -925,8 +926,41 @@ static void handle_creg_exch(struct udp_pcb *upcb, uint8_t *data,
         }
     }
 
-    if (group == 4) /* device config (унификация): переменная длина.
-                     * Формат: A0 04 <subcmd> <tidHi> <tidLo> <payload...>
+    if (group == 4) /* пеленг (правки коллеги): параметры импульсного сигнала.
+                     * Формат как у cregs: A0 04 <creg> 00 <word[4] BE>.
+                     * Пишется в AXI_CNTRL_REG1_BASEADDR + PELENG_PAR_OFFSET. */
+    {
+        switch (type) {
+            case 0x00: { /* Set cregs */
+
+                u32 offset = creg;
+                u32 word = (u32)data[7] | ((u32)data[6] << 8) |
+                           ((u32)data[5] << 16) | ((u32)data[4] << 24);
+
+                if (offset == 0) {
+                    pel.creg0.word = word;
+                    AXI_CNTRL_REG_WRITE(AXI_CNTRL_REG1_BASEADDR + PELENG_PAR_OFFSET, offset * 4, pel.creg0.word);
+                }
+
+                if (offset == 1) {
+                    pel.creg1.word = word;
+                    AXI_CNTRL_REG_WRITE(AXI_CNTRL_REG1_BASEADDR + PELENG_PAR_OFFSET, offset * 4, pel.creg1.word);
+                }
+
+                if (offset == 2) {
+                    pel.creg2.word = word;
+                    AXI_CNTRL_REG_WRITE(AXI_CNTRL_REG1_BASEADDR + PELENG_PAR_OFFSET, offset * 4, pel.creg2.word);
+                }
+
+                break;
+            }
+        }
+    }
+
+    if (group == 5) /* device config (унификация): переменная длина.
+                     * ВНИМАНИЕ: group=4 занят пеленгом (правки коллеги),
+                     * поэтому device-config живёт на group=5.
+                     * Формат: A0 05 <subcmd> <tidHi> <tidLo> <payload...>
                      * tid (target device_id): 0 = всем, иначе только совпавшему. */
     {
         uint8_t subcmd = data[2];
@@ -939,7 +973,7 @@ static void handle_creg_exch(struct udp_pcb *upcb, uint8_t *data,
             uint8_t *r = (uint8_t *)resp->payload;
             int k = 0;
             r[k++] = 0xA0;
-            r[k++] = 4;
+            r[k++] = 5;
             r[k++] = 0x10;
             r[k++] = (current_config.device_id >> 8) & 0xFF;
             r[k++] = current_config.device_id & 0xFF;
@@ -955,19 +989,19 @@ static void handle_creg_exch(struct udp_pcb *upcb, uint8_t *data,
             memcpy(r + k, current_config.bridge_mac, 6);
             k += 6;
             resp_send(upcb, resp, addr, port);
-            LOG1("[CMD 0xA0 g4] get config -> id=%d role=%d\r\n",
+            LOG1("[CMD 0xA0 g5] get config -> id=%d role=%d\r\n",
                  current_config.device_id, current_config.role);
             return;
         }
 
         /* Команды изменения состояния — с проверкой target_id. */
         if (len < 5) {
-            LOG1("[CMD 0xA0 g4] too short (len=%d)\r\n", len);
+            LOG1("[CMD 0xA0 g5] too short (len=%d)\r\n", len);
             return;
         }
         uint16_t tid = ((uint16_t)data[3] << 8) | data[4];
         if (tid != 0 && tid != current_config.device_id) {
-            LOG1("[CMD 0xA0 g4] not for me (tid=%d, my_id=%d)\r\n",
+            LOG1("[CMD 0xA0 g5] not for me (tid=%d, my_id=%d)\r\n",
                  tid, current_config.device_id);
             return;
         }
@@ -980,7 +1014,7 @@ static void handle_creg_exch(struct udp_pcb *upcb, uint8_t *data,
                 if (len < 6 || data[5] > 1) break;
                 config_set_defaults(&nc, (role_t)data[5]); /* роль => дефолты роли */
                 do_reinit = 1;
-                LOG1("[CMD 0xA0 g4] set role=%d\r\n", data[5]);
+                LOG1("[CMD 0xA0 g5] set role=%d\r\n", data[5]);
                 break;
 
             case 0x01: /* set network: ip[4] mask[4] gw[4] */
@@ -989,7 +1023,7 @@ static void handle_creg_exch(struct udp_pcb *upcb, uint8_t *data,
                 memcpy(nc.netmask, data + 9, 4);
                 memcpy(nc.gateway, data + 13, 4);
                 do_reinit = 1;
-                LOG1("[CMD 0xA0 g4] set net %d.%d.%d.%d\r\n",
+                LOG1("[CMD 0xA0 g5] set net %d.%d.%d.%d\r\n",
                      nc.ip[0], nc.ip[1], nc.ip[2], nc.ip[3]);
                 break;
 
@@ -999,11 +1033,11 @@ static void handle_creg_exch(struct udp_pcb *upcb, uint8_t *data,
                 memcpy(nc.mac3, data + 11, 6);
                 memcpy(nc.bridge_mac, data + 17, 6);
                 do_reinit = 1;
-                LOG1("[CMD 0xA0 g4] set MAC (all 3)\r\n");
+                LOG1("[CMD 0xA0 g5] set MAC (all 3)\r\n");
                 break;
 
             default:
-                LOG1("[CMD 0xA0 g4] unknown subcmd=0x%02X\r\n", subcmd);
+                LOG1("[CMD 0xA0 g5] unknown subcmd=0x%02X\r\n", subcmd);
                 break;
         }
 
@@ -1013,7 +1047,7 @@ static void handle_creg_exch(struct udp_pcb *upcb, uint8_t *data,
             if (ack) {
                 uint8_t *r = (uint8_t *)ack->payload;
                 r[0] = 0xA0;
-                r[1] = 4;
+                r[1] = 5;
                 r[2] = subcmd;
                 r[3] = data[3];
                 r[4] = data[4];
