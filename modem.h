@@ -16,6 +16,7 @@
 #define BASE_PAR_OFFSET 0
 #define TX_CHAN0_PAR_OFFSET 4*8
 #define RX_CHAN0_PAR_OFFSET 4*(8+4)
+#define PELENG_PAR_OFFSET 0
 
 #ifndef IS_QT
 
@@ -568,4 +569,46 @@ void ppos_set_tangenta(ena_type ena);
 
 
 void modem_init();
+
+/**
+ * @struct peleng
+ * @brief Параметры импульсного сигнала (пеленг). Пишутся по AXI в
+ *        AXI_CNTRL_REG1_BASEADDR + PELENG_PAR_OFFSET.
+ *        Управление: UDP 0xA0 group=4.
+ */
+#pragma pack(push, 1)
+struct peleng {
+
+    /** set parameters of the impulse signal */
+    union {
+        uint32_t word;
+        struct {
+            // from bit#0....down to bit#31
+            uint32_t dut_imp : 12; // fs = 120MHz tacts
+            uint32_t per_imp : 16; // fs = 120MHz tacts
+            uint32_t run : 1;
+            uint32_t barker : 3;
+        } inside;
+    } creg0;
+
+    /** set parameters of the impulse signal */
+    union {
+        uint32_t word;
+        struct {
+            uint32_t num_imp : 10;   // in group
+            uint32_t num_group : 10; // if (0) - infinity
+            uint32_t per_group : 12; // ms
+        } inside;
+    } creg1;
+
+    /** set freq shift of the impulse signal */
+    union {
+        uint32_t word;
+        struct {
+            uint32_t freq_shift;
+        } inside;
+    } creg2;
+};
+#pragma pack(pop)
+
 #endif // MODEM_H_

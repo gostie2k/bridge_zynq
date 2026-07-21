@@ -9,7 +9,7 @@ void config_set_defaults(struct device_config *cfg, role_t role)
     memset(cfg, 0, sizeof(*cfg));
 
     cfg->role = (uint8_t)role;
-    cfg->device_id = (role == ROLE_MASTER) ? 1 : 2;   /* временный ID из роли */
+    cfg->device_id = DEVICE_ID_DEFAULT;   /* per-device ID из platform_config.h (не из роли) */
 
     /* Общие для обеих ролей */
     cfg->netmask[0] = 255; cfg->netmask[1] = 255; cfg->netmask[2] = 255; cfg->netmask[3] = 0;

@@ -34,6 +34,7 @@
 #include "xil_printf.h"
 #include "watchdog.h"
 #include "platform_config.h"   /* FW_VERSION / WDT_ENABLED_DEFAULT */
+#include "cfg_flash.h"         /* хранение конфига в QSPI (унификация, Фаза 3) */
 
 #include "vid_buf.h"
 #include "cmd_buf.h"
@@ -82,6 +83,7 @@ struct cmd_pkt* zero_cmd_pkt;
 struct ppos_tx tx_chan0;
 struct ppos_rx rx_chan0;
 struct ppos_par ppos;
+struct peleng pel;   /* пеленг (правки коллеги), управление: 0xA0 group=4 */
 
 
 uint32_t mean_dist;
@@ -1193,6 +1195,11 @@ bool led_tog =true;
 static volatile bool        g_cfg_reinit_pending = false;
 static struct device_config g_cfg_pending;
 
+/* Отложенное сохранение/стирание конфига во флэш QSPI. Реальная запись —
+ * в main loop (стирание сектора блокирует ~1 с; нельзя в UDP-колбэке). */
+static volatile bool        g_cfg_save_pending  = false;
+static volatile bool        g_cfg_erase_pending = false;
+
 /* (Пере)создание UDP-листенеров. Вызывается из main() и из device_reinit(). */
 static void init_udp_listeners(void)
 {
@@ -1222,6 +1229,28 @@ static void init_udp_listeners(void)
  * UDP-листенеры под новый IP. GEM/netif НЕ сносим (xemac_add повторно
  * течёт памятью и реинициализирует GEM; промискуитет уже включён, так что
  * для приёма MAC в железе не важен, а исходящий src-MAC берётся из hwaddr). */
+/* Записать PL-бит выбора роли (ppos.creg3.MasterNSlave) под текущую роль.
+ * По имени поля (аналогично AD9361_TXnRX: 1=TX) считаем 1 = MASTER, 0 = SLAVE.
+ * ⚠ Если PL трактует бит наоборот — поменять условие здесь. Прочие биты creg3
+ * (AD9361_ENABLE/TXnRX и т.д.) сохраняются. */
+/* Перестроить creg3 под текущую роль — как в modem_init (MASTER: MasterNSlave=1,
+ * SLAVE: 0; полярность подтверждена modem.c). Задаёт весь набор role/TDMA-битов,
+ * а не только MasterNSlave: иначе PL-движок TDMA не согласуется с новой ролью. */
+static void apply_role_to_pl(void)
+{
+    ppos.creg3.word = 0;
+    ppos.creg3.inside.AD9361_ENABLE = 1;
+    ppos.creg3.inside.AD9361_TXnRX  = 1;
+    ppos.creg3.inside.ENABLE_AUTO   = 1;
+    ppos.creg3.inside.TXnRX_AUTO    = 1;
+    ppos.creg3.inside.IS_TDMA       = 1;
+    ppos.creg3.inside.MasterNSlave  = (current_config.role == ROLE_MASTER) ? 1 : 0;
+    AXI_CNTRL_REG_WRITE(AXI_CNTRL_REG_BASEADDR, 12, ppos.creg3.word);
+    xil_printf("[CFG] PL role: creg3=0x%08lX MasterNSlave=%d (role=%d)\r\n",
+               (unsigned long)ppos.creg3.word, ppos.creg3.inside.MasterNSlave,
+               current_config.role);
+}
+
 static int device_reinit(const struct device_config *new_cfg)
 {
     xil_printf("[CFG] reinit: role=%d ip=%d.%d.%d.%d\r\n",
@@ -1259,6 +1288,17 @@ static int device_reinit(const struct device_config *new_cfg)
     memcpy(bridge_netif.hwaddr,    current_config.bridge_mac, 6);
     memcpy(bridge_data.ethaddr.addr, current_config.bridge_mac, 6);
 
+    /* 4.5. Смена роли рестартует PL TDMA-движок (creg3: MasterNSlave/ENABLE_AUTO).
+     * Флипать это на живом радио нельзя — PL десинхронизируется. Поэтому:
+     *   1) гасим TDMA-движок (ENABLE_AUTO=0),
+     *   2) сбрасываем FIFO (дропаем «на лету» блоки старой роли),
+     *   3) перестраиваем creg3 под новую роль (ENABLE_AUTO=1 обратно). */
+    ppos.creg3.inside.ENABLE_AUTO = 0;
+    AXI_CNTRL_REG_WRITE(AXI_CNTRL_REG_BASEADDR, 12, ppos.creg3.word);
+    XLlFifo_IntClear(&fifo, 0xFFFFFFFF);
+    XLlFifo_Reset(&fifo);
+    apply_role_to_pl();
+
     /* 5. Пересоздать листенеры под новый IP */
     init_udp_listeners();
 
@@ -1284,6 +1324,18 @@ void device_request_reinit(const struct device_config *new_cfg)
 {
     g_cfg_pending        = *new_cfg;
     g_cfg_reinit_pending = true;
+}
+
+/* Сохранить текущий конфиг во флэш — отложено до main loop. */
+void device_request_save(void)
+{
+    g_cfg_save_pending = true;
+}
+
+/* Сброс к заводским (стереть флэш-конфиг) — отложено до main loop. */
+void device_request_erase(void)
+{
+    g_cfg_erase_pending = true;
 }
 
 
@@ -1854,6 +1906,19 @@ modem_init();
      * Должно быть до net_init() и до использования RemoteAddr. */
     config_init_defaults_from_build();
 
+    /* Фаза 3: перекрыть дефолты сохранённым конфигом из QSPI (если есть валидный).
+     * Должно быть до apply_role_to_pl()/RemoteAddr/net_init(), чтобы роль, IP и
+     * MAC поднялись сразу из флэш. Нет валидной копии — остаются дефолты выше. */
+    if (cfg_flash_init() == 0) {
+        struct device_config loaded;
+        if (cfg_flash_load(&loaded))
+            current_config = loaded;
+    }
+
+    /* Выставить PL-бит роли под стартовую роль (creg3 с AD9361-битами уже
+     * записан выше, здесь только уточняем MasterNSlave). */
+    apply_role_to_pl();
+
     IP4_ADDR(&RemoteAddr, current_config.peer_ip[0], current_config.peer_ip[1],
                           current_config.peer_ip[2], current_config.peer_ip[3]);
 
@@ -1923,6 +1988,23 @@ lwip_init();
     		g_cfg_reinit_pending = false;
     		wdt_kick();
     		device_reinit(&g_cfg_pending);
+    	}
+
+    	/* Отложенное сохранение конфига во флэш QSPI (блокирует ~1 с — гасим WDT).
+    	 * Пишем ПОСЛЕ reinit, чтобы во флэш ушёл уже применённый current_config. */
+    	if (g_cfg_save_pending) {
+    		g_cfg_save_pending = false;
+    		wdt_kick();
+    		cfg_flash_save(&current_config);
+    		wdt_kick();
+    	}
+
+    	/* Отложенный сброс к заводским (стереть флэш-конфиг). */
+    	if (g_cfg_erase_pending) {
+    		g_cfg_erase_pending = false;
+    		wdt_kick();
+    		cfg_flash_erase();
+    		wdt_kick();
     	}
 
 
