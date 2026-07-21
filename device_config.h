@@ -19,6 +19,9 @@ typedef enum {
 struct device_config {
     uint8_t  role;            /* role_t */
 
+    uint16_t device_id;       /* уникальный ID устройства (для адресных broadcast-команд).
+                               * Временно: master=1, slave=2. Позже — из flash UID. */
+
     uint8_t  ip[4];           /* свой IP (bridge_netif) */
     uint8_t  netmask[4];
     uint8_t  gateway[4];
@@ -37,5 +40,9 @@ void config_set_defaults(struct device_config *cfg, role_t role);
 
 /* Заполнить current_config дефолтами, роль берётся из IS_MASTER/IS_SLAVE. */
 void config_init_defaults_from_build(void);
+
+/* Запросить применение нового конфига (смена роли/сети).
+ * Безопасно вызывать из UDP-колбэка: сам reinit отложен до main loop. */
+void device_request_reinit(const struct device_config *new_cfg);
 
 #endif /* DEVICE_CONFIG_H_ */

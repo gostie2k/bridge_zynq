@@ -1183,6 +1183,110 @@ struct stat_modem* status_modem;
 bool led_tog =true;
 
 
+/* ===================================================================
+ *  Унификация: рантайм-смена роли (Фаза 2)
+ * =================================================================== */
+
+/* Отложенный reinit: команда смены роли ставит флаг, сам reinit
+ * выполняется в main loop (нельзя освобождать cmd_udp_pcb внутри его
+ * собственного recv-колбэка). */
+static volatile bool        g_cfg_reinit_pending = false;
+static struct device_config g_cfg_pending;
+
+/* (Пере)создание UDP-листенеров. Вызывается из main() и из device_reinit(). */
+static void init_udp_listeners(void)
+{
+    status_pcb = udp_new(); // send status & debug pkts
+    udp_bind_netif(status_pcb, &bridge_netif);
+    udp_bind(status_pcb, &bridge_netif.ip_addr, StatusPort);
+
+    cmd_udp_pcb = udp_new();
+    ip_set_option(cmd_udp_pcb, SOF_BROADCAST);
+    udp_bind(cmd_udp_pcb, IP_ADDR_ANY, CmdPort);
+    udp_recv(cmd_udp_pcb, cmd_udp_callback, NULL);
+    xil_printf("[INIT] cmd_udp_pcb bound to port %d on bridge_netif\r\n", CmdPort);
+
+    recv_pcb = udp_new();
+    udp_bind_netif(recv_pcb, &bridge_netif);
+    udp_bind(recv_pcb, &bridge_netif.ip_addr, 5008);
+    udp_recv(recv_pcb, recv_callback, NULL);
+
+    send_rx_data = udp_new(); // temp send video pkts
+    udp_bind_netif(send_rx_data, &bridge_netif);
+
+    debug_pcb = udp_new(); // send status & debug pkts
+    udp_bind_netif(debug_pcb, &bridge_netif);
+}
+
+/* "Мягкий" reinit: меняем сетевую идентичность (IP + MAC) и пересоздаём
+ * UDP-листенеры под новый IP. GEM/netif НЕ сносим (xemac_add повторно
+ * течёт памятью и реинициализирует GEM; промискуитет уже включён, так что
+ * для приёма MAC в железе не важен, а исходящий src-MAC берётся из hwaddr). */
+static int device_reinit(const struct device_config *new_cfg)
+{
+    xil_printf("[CFG] reinit: role=%d ip=%d.%d.%d.%d\r\n",
+               new_cfg->role, new_cfg->ip[0], new_cfg->ip[1],
+               new_cfg->ip[2], new_cfg->ip[3]);
+
+    /* 1. Заморозить data path */
+    is_run = false;
+
+    /* 2. Снести UDP-листенеры (привязаны к старому IP) */
+    if (status_pcb)   { udp_remove(status_pcb);   status_pcb   = NULL; }
+    if (cmd_udp_pcb)  { udp_remove(cmd_udp_pcb);   cmd_udp_pcb  = NULL; }
+    if (recv_pcb)     { udp_remove(recv_pcb);      recv_pcb     = NULL; }
+    if (send_rx_data) { udp_remove(send_rx_data);  send_rx_data = NULL; }
+    if (debug_pcb)    { udp_remove(debug_pcb);     debug_pcb    = NULL; }
+
+    /* 3. Применить новый конфиг */
+    current_config = *new_cfg;
+    IP4_ADDR(&RemoteAddr, current_config.peer_ip[0], current_config.peer_ip[1],
+                          current_config.peer_ip[2], current_config.peer_ip[3]);
+
+    /* 4. IP + MAC'и in-place */
+    {
+        ip4_addr_t ip, nm, gw;
+        IP4_ADDR(&ip, current_config.ip[0], current_config.ip[1],
+                      current_config.ip[2], current_config.ip[3]);
+        IP4_ADDR(&nm, current_config.netmask[0], current_config.netmask[1],
+                      current_config.netmask[2], current_config.netmask[3]);
+        IP4_ADDR(&gw, current_config.gateway[0], current_config.gateway[1],
+                      current_config.gateway[2], current_config.gateway[3]);
+        netif_set_addr(&bridge_netif, &ip, &nm, &gw);
+    }
+    memcpy(port1_bridge.hwaddr,    current_config.mac1,       6);
+    memcpy(port3_bridge.hwaddr,    current_config.mac3,       6);
+    memcpy(bridge_netif.hwaddr,    current_config.bridge_mac, 6);
+    memcpy(bridge_data.ethaddr.addr, current_config.bridge_mac, 6);
+
+    /* 5. Пересоздать листенеры под новый IP */
+    init_udp_listeners();
+
+    /* 6. Чистый старт счётчиков radio_stream под новую роль */
+    radio_stream_reset_stats();
+    radio_stream_reset_rx_ids();
+
+    /* 7. Запуститься */
+    is_run = true;
+
+    /* Разослать gratuitous ARP — чтобы соседи и коммутатор сразу обновили
+     * IP->MAC (иначе держат старый MAC до устаревания записи). */
+    etharp_gratuitous(&bridge_netif);
+
+    xil_printf("[CFG] reinit done: role=%d id=%d\r\n",
+               current_config.role, current_config.device_id);
+    return 0;
+}
+
+/* Запросить смену конфига из любого контекста (в т.ч. UDP-колбэка).
+ * Реальный reinit отложен до main loop. */
+void device_request_reinit(const struct device_config *new_cfg)
+{
+    g_cfg_pending        = *new_cfg;
+    g_cfg_reinit_pending = true;
+}
+
+
 int main()
 {
 	/* Прочитать SLCR.REBOOT_STATUS до любого ресета регистров — покажет, был ли
@@ -1788,43 +1892,7 @@ lwip_init();
 
 
 
-    status_pcb = udp_new(); // send status & debug pkts
-    udp_bind_netif (status_pcb, &bridge_netif); //&udp_netif2);
-    status = udp_bind(status_pcb,  &bridge_netif.ip_addr, StatusPort);
-
-
-    cmd_udp_pcb = udp_new();
-    ip_set_option(cmd_udp_pcb, SOF_BROADCAST);
-
-    //udp_bind_netif(cmd_udp_pcb, &bridge_netif);
-    udp_bind(cmd_udp_pcb, IP_ADDR_ANY, CmdPort);
-    udp_recv(cmd_udp_pcb, cmd_udp_callback, NULL);
-    xil_printf("[INIT] cmd_udp_pcb bound to port %d on bridge_netif\r\n", CmdPort);
-
-
-
-
-
-
-    //send_pcb = udp_new();
-    recv_pcb = udp_new();
-    udp_bind_netif (recv_pcb, &bridge_netif); //&udp_netif2);
-    status = udp_bind(recv_pcb,  &bridge_netif.ip_addr, 5008);
-    //status = udp_bind(recv_pcb, &RemoteAddr, 5008);
-
-    udp_recv(recv_pcb, recv_callback, NULL);
-
-
-    send_rx_data = udp_new(); // temp send video pkts
-    udp_bind_netif (send_rx_data, &bridge_netif); //&udp_netif2);
-
-
-
-    debug_pcb = udp_new(); // send status & debug pkts
-    udp_bind_netif (debug_pcb, &bridge_netif); //&udp_netif2);
-
-
-    //udp_recv(debug_pcb, cmd_udp_callback, NULL);
+    init_udp_listeners();
 
 
 
@@ -1849,6 +1917,13 @@ lwip_init();
     {
     	wdt_hb_main();
     	wdt_section_mark(WDT_SEC_OTHER);   /* по умолчанию — переопределяется ниже */
+
+    	/* Отложенная смена роли/конфига (запрошена из UDP-колбэка) */
+    	if (g_cfg_reinit_pending) {
+    		g_cfg_reinit_pending = false;
+    		wdt_kick();
+    		device_reinit(&g_cfg_pending);
+    	}
 
 
     	XTime_GetTime(&tmp_time);

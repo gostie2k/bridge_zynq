@@ -209,39 +209,7 @@ void fifo_debug_uart_test(XUartPs *uart_ptr)
         test_write_cnt = 0;
         xil_printf("[FIFO_TEST] FIFO RESET done.\r\n");
 
-//    } else if (ch == 'l') {
-//        // --- Переключить loopback ---
-//        int now = !radio_stream_get_loopback();
-//        radio_stream_set_loopback(now);
-//
-//    } else if (ch == 't') {
-//        // --- Тест сегментации: отправить тестовый Ethernet-фрейм через radio_linkoutput ---
-//        // Минимальный Ethernet-фрейм: dst(6) + src(6) + type(2) + payload(46) = 60 байт
-//        static uint8_t test_eth[60];
-//        static uint8_t test_seq = 0;
-//
-//        // dst = broadcast, src = 00:0A:35:AA:BB:CC, type = 0x0800 (IP-like)
-//        memset(test_eth, 0xFF, 6);                              // dst broadcast
-//        test_eth[6]=0x00; test_eth[7]=0x0A; test_eth[8]=0x35;
-//        test_eth[9]=0xAA; test_eth[10]=0xBB; test_eth[11]=0xCC; // src
-//        test_eth[12]=0x08; test_eth[13]=0x00;                   // EtherType
-//        for (int i=14; i<60; i++) test_eth[i] = (uint8_t)(test_seq + i); // payload
-//        test_seq++;
-//
-//        // Завернуть в pbuf и отправить через radio_linkoutput
-//        extern struct netif port3_bridge;
-//        struct pbuf *tp = pbuf_alloc(PBUF_RAW, 60, PBUF_RAM);
-//        if (tp) {
-//            memcpy(tp->payload, test_eth, 60);
-//            xil_printf("[FIFO_TEST] Sending test Eth frame #%u (60 bytes) via radio\r\n",
-//                       (unsigned)(test_seq-1));
-//            err_t e = radio_linkoutput(&port3_bridge, tp);
-//            pbuf_free(tp);
-//            xil_printf("[FIFO_TEST] radio_linkoutput returned %d\r\n", (int)e);
-//            radio_stream_print_stats();
-//        } else {
-//            xil_printf("[FIFO_TEST] pbuf_alloc failed\r\n");
-//        }
+
     } else if (ch == 'c') {
         // --- Сброс статистики и состояния radio_stream ---
         radio_stream_reset_stats();

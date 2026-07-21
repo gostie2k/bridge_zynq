@@ -10,7 +10,7 @@
 extern struct netif port3_bridge;
 
 #define PL_BLOCK_SIZE 188       // Р Р°Р·РјРµСЂ Р±Р»РѕРєР° РґР»СЏ FPGA
-#define BLOCK_HEADER_SIZE 1     // 1 Р±Р°Р№С‚ РЅР° СЃС‡РµС‚С‡РёРє СЃРµРіРјРµРЅС‚РѕРІ
+#define BLOCK_HEADER_SIZE 3   /* [0]=seq, [1..2]=device_id источника */ //    // 1 Р±Р°Р№С‚ РЅР° СЃС‡РµС‚С‡РёРє СЃРµРіРјРµРЅС‚РѕРІ
 #define BLOCK_PAYLOAD_SIZE (PL_BLOCK_SIZE - BLOCK_HEADER_SIZE) // 187 Р±Р°Р№С‚ РґР°РЅРЅС‹С…
 
 #define MAGIC_H 0xFA
@@ -74,7 +74,8 @@ static uint16_t rx_pkt_received = 0;
 static uint8_t  rx_pkt_buffer[1600];
 static uint32_t rx_calc_crc = 0;
 static uint32_t rx_recv_crc = 0;
-static uint8_t  rx_last_seq = 0;      // Р”Р»СЏ РїСЂРѕРІРµСЂРєРё РЅРµРїСЂРµСЂС‹РІРЅРѕСЃС‚Рё СЃРµРіРјРµРЅС‚РѕРІ
+static uint8_t  rx_last_seq = 0;      // для проверки непрерывности сегментов
+static uint16_t rx_last_src_id = 0;   // device_id источника из заголовка блока (для точка-многоточка)
 static int      rx_first_block_seen = 0;
 static uint16_t rx_last_pkt_id = 0;  // Р”Р»СЏ РїСЂРѕРІРµСЂРєРё РЅРµРїСЂРµСЂС‹РІРЅРѕСЃС‚Рё РїР°РєРµС‚РѕРІ
 static int      rx_first_pkt_seen = 0;
@@ -342,15 +343,19 @@ void tx_process() {
 
         uint8_t block[PL_BLOCK_SIZE];
         block[0] = global_tx_seq_counter++;
+        /* device_id (2 байта) в заголовок КАЖДОГО блока — для точка-многоточка:
+         * приёмник различает, от какого модема пришёл сегмент. */
+        block[1] = (current_config.device_id >> 8) & 0xFF;
+        block[2] =  current_config.device_id       & 0xFF;
 
         // Блочное копирование из ring (с учётом оборачивания)
         uint32_t space_to_end = RING_SIZE - tx_tail;
         if (space_to_end >= BLOCK_PAYLOAD_SIZE) {
-            memcpy(&block[1], &tx_ring[tx_tail], BLOCK_PAYLOAD_SIZE);
+            memcpy(&block[BLOCK_HEADER_SIZE], &tx_ring[tx_tail], BLOCK_PAYLOAD_SIZE);
             tx_tail = (tx_tail + BLOCK_PAYLOAD_SIZE) % RING_SIZE;
         } else {
-            memcpy(&block[1], &tx_ring[tx_tail], space_to_end);
-            memcpy(&block[1 + space_to_end], &tx_ring[0], BLOCK_PAYLOAD_SIZE - space_to_end);
+            memcpy(&block[BLOCK_HEADER_SIZE], &tx_ring[tx_tail], space_to_end);
+            memcpy(&block[BLOCK_HEADER_SIZE + space_to_end], &tx_ring[0], BLOCK_PAYLOAD_SIZE - space_to_end);
             tx_tail = BLOCK_PAYLOAD_SIZE - space_to_end;
         }
         tx_count -= BLOCK_PAYLOAD_SIZE;
@@ -439,6 +444,9 @@ void radio_input_block(uint8_t *block_188, struct netif *inp_netif) {
     dbg_rx_blocks++;
 
     uint8_t seq = block_188[0];
+    /* device_id источника (пока точка-точка — только читаем; в многоточке
+     * тут будет демукс по источнику). */
+    rx_last_src_id = ((uint16_t)block_188[1] << 8) | block_188[2];
     if (!rx_first_block_seen) {
         rx_first_block_seen = 1;
     } else if ((uint8_t)(rx_last_seq + 1) != seq) {
@@ -448,7 +456,7 @@ void radio_input_block(uint8_t *block_188, struct netif *inp_netif) {
 
     for (int i = 0; i < BLOCK_PAYLOAD_SIZE; i++) {
         if (rx_count < RING_SIZE) {
-            rx_ring[rx_head] = block_188[i + 1];
+            rx_ring[rx_head] = block_188[i + BLOCK_HEADER_SIZE];
             rx_head = (rx_head + 1) % RING_SIZE;
             rx_count++;
         } else {
@@ -599,9 +607,9 @@ void radio_input_block(uint8_t *block_188, struct netif *inp_netif) {
 void radio_stream_print_stats(void) {
     xil_printf("TX: %u Pkt -> %u Blk (FIFO full: %u, stall: %u, reject: %u)\r\n",
         dbg_tx_pkts, dbg_tx_blocks, dbg_err_fifo_full, dbg_err_tx_stall, dbg_err_tx_reject);
-    xil_printf("RX: %u Blk (seg gap: %u, overflow: %u) -> %u Pkt (pkt gap: %u, CRC err: %u)\r\n",
+    xil_printf("RX: %u Blk (seg gap: %u, overflow: %u) -> %u Pkt (pkt gap: %u, CRC err: %u)  src_id=%u\r\n",
         dbg_rx_blocks, dbg_err_seq_gap, dbg_err_rx_overflow,
-        dbg_rx_pkts, dbg_err_pkt_gap, dbg_err_crc);
+        dbg_rx_pkts, dbg_err_pkt_gap, dbg_err_crc, rx_last_src_id);
     xil_printf("RING: tx_count=%u/%u\r\n", tx_count, RING_SIZE);
 }
 

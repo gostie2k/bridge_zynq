@@ -292,7 +292,10 @@ void net_init()
                (void*)&bridge_data,
                bridgeif_init, ethernet_input); //eth_inp);
 
-     bridge_netif.flags|= NETIF_FLAG_ETHARP | NETIF_FLAG_ETHERNET;
+     /* NETIF_FLAG_BROADCAST обязателен, иначе ip4_addr_isbroadcast() не
+      * признаёт directed-broadcast (192.168.250.255) и ip4_input его дропает.
+      * Limited-broadcast (255.255.255.255) проходит и без флага. */
+     bridge_netif.flags|= NETIF_FLAG_ETHARP | NETIF_FLAG_ETHERNET | NETIF_FLAG_BROADCAST;
 
 
 
