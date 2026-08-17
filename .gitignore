@@ -2,3 +2,12 @@
 ceiling_*.log
 stability_*.log
 docs/cmd_temp_log.txt
+
+# Временные lock-файлы офисных редакторов (LibreOffice/OpenOffice)
+.~lock.*#
+~$*.docx
+
+# Прочий мусор
+*.tmp
+*.bak
+*~
