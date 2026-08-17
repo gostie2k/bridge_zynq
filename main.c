@@ -35,6 +35,7 @@
 #include "watchdog.h"
 #include "platform_config.h"   /* FW_VERSION / WDT_ENABLED_DEFAULT */
 #include "cfg_flash.h"         /* хранение конфига в QSPI (унификация, Фаза 3) */
+#include "radio_params.h"      /* радиопараметры профиля (current_radio) */
 
 #include "vid_buf.h"
 #include "cmd_buf.h"
@@ -1906,13 +1907,23 @@ modem_init();
      * Должно быть до net_init() и до использования RemoteAddr. */
     config_init_defaults_from_build();
 
-    /* Фаза 3: перекрыть дефолты сохранённым конфигом из QSPI (если есть валидный).
-     * Должно быть до apply_role_to_pl()/RemoteAddr/net_init(), чтобы роль, IP и
-     * MAC поднялись сразу из флэш. Нет валидной копии — остаются дефолты выше. */
+    /* Радиопараметры: дефолт = снимок ЖИВЫХ регистров после modem_init() (он уже
+     * отработал выше), затем — перекрытие из QSPI-профиля, если он есть. */
+    radio_params_capture(&current_radio);
+
+    /* Фаза 3: перекрыть дефолты сохранённым ПРОФИЛЕМ из QSPI (сеть + радио), если
+     * есть валидный. Должно быть до apply_role_to_pl()/RemoteAddr/net_init(), чтобы
+     * роль/IP/MAC поднялись сразу из флэш. modem_init() уже отработал выше (baseline),
+     * поэтому применённый профиль перекрывает зашитые радио-дефолты. Нет валидной
+     * копии — остаются дефолты. */
     if (cfg_flash_init() == 0) {
         struct device_config loaded;
-        if (cfg_flash_load(&loaded))
+        struct radio_params  loaded_radio;
+        if (cfg_flash_load(&loaded, &loaded_radio)) {
             current_config = loaded;
+            current_radio  = loaded_radio;
+            radio_params_apply(&current_radio);   /* частоты/аттенюация/пеленг из профиля */
+        }
     }
 
     /* Выставить PL-бит роли под стартовую роль (creg3 с AD9361-битами уже
@@ -1995,7 +2006,8 @@ lwip_init();
     	if (g_cfg_save_pending) {
     		g_cfg_save_pending = false;
     		wdt_kick();
-    		cfg_flash_save(&current_config);
+    		radio_params_capture(&current_radio);   /* снимок живых регистров (creg-панель) */
+    		cfg_flash_save(&current_config, &current_radio);
     		wdt_kick();
     	}
 

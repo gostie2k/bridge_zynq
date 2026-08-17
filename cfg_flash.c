@@ -34,16 +34,19 @@
  *  Формат записи во флэш
  * =================================================================== */
 #define CFG_MAGIC             0x50434647u  /* 'PCFG' (little-endian в памяти) */
-#define CFG_VERSION           1u
+#define CFG_VERSION           2u   /* v2: добавлены radio_params (сеть+радио) */
 
 struct __attribute__((packed)) cfg_record {
     uint32_t magic;
     uint16_t version;
-    uint16_t size;                  /* sizeof(struct device_config) */
+    uint16_t size;                  /* sizeof(cfg) + sizeof(radio) */
     uint32_t seq;                   /* монотонный счётчик поколений */
-    struct device_config cfg;
+    struct device_config cfg;       /* сетевой конфиг */
+    struct radio_params  radio;     /* радиопараметры (профиль, версия формата 2) */
     uint32_t crc32;                 /* CRC32 по всем байтам записи ДО этого поля */
 };
+
+#define CFG_PAYLOAD_SIZE (sizeof(struct device_config) + sizeof(struct radio_params))
 
 /* ===================================================================
  *  Состояние
@@ -139,7 +142,7 @@ static int record_valid(const struct cfg_record *r)
 {
     if (r->magic != CFG_MAGIC)                  return 0;
     if (r->version != CFG_VERSION)              return 0;
-    if (r->size != sizeof(struct device_config)) return 0;
+    if (r->size != CFG_PAYLOAD_SIZE)            return 0;
     uint32_t crc = crc32_calc(r, sizeof(*r) - sizeof(r->crc32));
     return (crc == r->crc32);
 }
@@ -178,7 +181,7 @@ int cfg_flash_init(void)
     return 0;
 }
 
-int cfg_flash_load(struct device_config *out)
+int cfg_flash_load(struct device_config *net, struct radio_params *radio)
 {
     if (!qspi_ready) return 0;
 
@@ -195,14 +198,16 @@ int cfg_flash_load(struct device_config *out)
         xil_printf("[QSPI] no valid config (A:%d B:%d) -> defaults\r\n", va, vb);
         return 0;
     }
-    *out = best->cfg;
-    xil_printf("[QSPI] loaded config seq=%lu (slot %c): role=%d id=%d\r\n",
+    *net   = best->cfg;
+    *radio = best->radio;
+    xil_printf("[QSPI] loaded profile seq=%lu (slot %c): role=%d id=%d tx=%lu kHz\r\n",
                (unsigned long)best->seq, (best == &ra) ? 'A' : 'B',
-               best->cfg.role, best->cfg.device_id);
+               best->cfg.role, best->cfg.device_id,
+               (unsigned long)best->radio.tx.creg2.word);
     return 1;
 }
 
-int cfg_flash_save(const struct device_config *cfg)
+int cfg_flash_save(const struct device_config *net, const struct radio_params *radio)
 {
     if (!qspi_ready) return -1;
 
@@ -226,9 +231,10 @@ int cfg_flash_save(const struct device_config *cfg)
     memset(&rec, 0, sizeof(rec));
     rec.magic   = CFG_MAGIC;
     rec.version = CFG_VERSION;
-    rec.size    = sizeof(struct device_config);
+    rec.size    = CFG_PAYLOAD_SIZE;
     rec.seq     = maxseq + 1;
-    rec.cfg     = *cfg;
+    rec.cfg     = *net;
+    rec.radio   = *radio;
     rec.crc32   = crc32_calc(&rec, sizeof(rec) - sizeof(rec.crc32));
 
     /* 3. Стереть целевой сектор и записать. */
@@ -241,9 +247,9 @@ int cfg_flash_save(const struct device_config *cfg)
         xil_printf("[QSPI] save VERIFY FAILED (slot 0x%08X)\r\n", target);
         return -4;
     }
-    xil_printf("[QSPI] saved config seq=%lu (slot %c): role=%d id=%d\r\n",
+    xil_printf("[QSPI] saved profile seq=%lu (slot %c): role=%d id=%d tx=%lu kHz\r\n",
                (unsigned long)rec.seq, (target == CFG_SLOT_A) ? 'A' : 'B',
-               cfg->role, cfg->device_id);
+               net->role, net->device_id, (unsigned long)radio->tx.creg2.word);
     return 0;
 }
 

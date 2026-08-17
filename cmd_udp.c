@@ -10,7 +10,7 @@
 #include "firewall.h"
 #include "watchdog.h"
 #include "platform_config.h" /* FW_ROLE_ID / FW_BUILD_STR */
-#include "device_config.h"   /* current_config, смена роли */
+#include "device_config.h"   /* current_config, смена роли, device_request_save */
 #include "lwip/pbuf.h"
 #include "lwip/udp.h"
 #include "lwip/ip_addr.h"
@@ -800,6 +800,7 @@ static void handle_creg_exch(struct udp_pcb *upcb, uint8_t *data,
     if (group == 0) // ppos
     {
         switch (type) {
+            case 0x01: /* wr_flash: применить регистр как set + запросить сохранение (ниже) */
             case 0x00: { /* Set cregs */
 
                 u32 offset = creg;
@@ -831,6 +832,7 @@ static void handle_creg_exch(struct udp_pcb *upcb, uint8_t *data,
     if (group == 1) // tx_chan0
     {
         switch (type) {
+            case 0x01: /* wr_flash: применить регистр как set + запросить сохранение (ниже) */
             case 0x00: { /* Set cregs */
 
                 u32 offset = creg;
@@ -875,6 +877,7 @@ static void handle_creg_exch(struct udp_pcb *upcb, uint8_t *data,
     if (group == 2) // rx_chan0
     {
         switch (type) {
+            case 0x01: /* wr_flash: применить регистр как set + запросить сохранение (ниже) */
             case 0x00: { /* Set cregs */
 
                 u32 offset = creg;
@@ -904,6 +907,7 @@ static void handle_creg_exch(struct udp_pcb *upcb, uint8_t *data,
     if (group == 3) //
     {
         switch (type) {
+            case 0x01: /* wr_flash: применить регистр как set + запросить сохранение (ниже) */
             case 0x00: { /* Set cregs */
 
                 u32 offset = creg;
@@ -931,6 +935,7 @@ static void handle_creg_exch(struct udp_pcb *upcb, uint8_t *data,
                      * Пишется в AXI_CNTRL_REG1_BASEADDR + PELENG_PAR_OFFSET. */
     {
         switch (type) {
+            case 0x01: /* wr_flash: применить регистр как set + запросить сохранение (ниже) */
             case 0x00: { /* Set cregs */
 
                 u32 offset = creg;
@@ -955,6 +960,14 @@ static void handle_creg_exch(struct udp_pcb *upcb, uint8_t *data,
                 break;
             }
         }
+    }
+
+    /* op=1 (wr_flash) в creg-панели: регистр выше уже применён (case 0x01→0x00),
+     * теперь запросить сохранение ВСЕГО профиля в QSPI. Реальная запись — в main
+     * loop (там снимок живых регистров: radio_params_capture + cfg_flash_save). */
+    if (group <= 4 && type == 0x01) {
+        device_request_save();
+        LOG1("[CMD] 0xA0 g%d creg=%d: wr_flash -> save profile requested\r\n", group, creg);
     }
 
     if (group == 5) /* device config (унификация): переменная длина.
