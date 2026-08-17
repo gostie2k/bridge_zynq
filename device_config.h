@@ -38,4 +38,11 @@ void config_init_defaults_from_build(void);
  * Безопасно вызывать из UDP-колбэка: сам reinit отложен до main loop. */
 void device_request_reinit(const struct device_config *new_cfg);
 
+/* Запросить сохранение текущего конфига во флэш QSPI (переживает перезагрузку).
+ * Безопасно из UDP-колбэка: запись отложена до main loop (блокирует ~1 с). */
+void device_request_save(void);
+
+/* Запросить сброс конфига во флэш к заводским (стереть обе копии). */
+void device_request_erase(void);
+
 #endif /* DEVICE_CONFIG_H_ */

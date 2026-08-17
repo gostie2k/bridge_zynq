@@ -34,6 +34,7 @@
 #include "xil_printf.h"
 #include "watchdog.h"
 #include "platform_config.h"   /* FW_VERSION / WDT_ENABLED_DEFAULT */
+#include "cfg_flash.h"         /* хранение конфига в QSPI (унификация, Фаза 3) */
 
 #include "vid_buf.h"
 #include "cmd_buf.h"
@@ -1194,6 +1195,11 @@ bool led_tog =true;
 static volatile bool        g_cfg_reinit_pending = false;
 static struct device_config g_cfg_pending;
 
+/* Отложенное сохранение/стирание конфига во флэш QSPI. Реальная запись —
+ * в main loop (стирание сектора блокирует ~1 с; нельзя в UDP-колбэке). */
+static volatile bool        g_cfg_save_pending  = false;
+static volatile bool        g_cfg_erase_pending = false;
+
 /* (Пере)создание UDP-листенеров. Вызывается из main() и из device_reinit(). */
 static void init_udp_listeners(void)
 {
@@ -1318,6 +1324,18 @@ void device_request_reinit(const struct device_config *new_cfg)
 {
     g_cfg_pending        = *new_cfg;
     g_cfg_reinit_pending = true;
+}
+
+/* Сохранить текущий конфиг во флэш — отложено до main loop. */
+void device_request_save(void)
+{
+    g_cfg_save_pending = true;
+}
+
+/* Сброс к заводским (стереть флэш-конфиг) — отложено до main loop. */
+void device_request_erase(void)
+{
+    g_cfg_erase_pending = true;
 }
 
 
@@ -1888,6 +1906,15 @@ modem_init();
      * Должно быть до net_init() и до использования RemoteAddr. */
     config_init_defaults_from_build();
 
+    /* Фаза 3: перекрыть дефолты сохранённым конфигом из QSPI (если есть валидный).
+     * Должно быть до apply_role_to_pl()/RemoteAddr/net_init(), чтобы роль, IP и
+     * MAC поднялись сразу из флэш. Нет валидной копии — остаются дефолты выше. */
+    if (cfg_flash_init() == 0) {
+        struct device_config loaded;
+        if (cfg_flash_load(&loaded))
+            current_config = loaded;
+    }
+
     /* Выставить PL-бит роли под стартовую роль (creg3 с AD9361-битами уже
      * записан выше, здесь только уточняем MasterNSlave). */
     apply_role_to_pl();
@@ -1961,6 +1988,23 @@ lwip_init();
     		g_cfg_reinit_pending = false;
     		wdt_kick();
     		device_reinit(&g_cfg_pending);
+    	}
+
+    	/* Отложенное сохранение конфига во флэш QSPI (блокирует ~1 с — гасим WDT).
+    	 * Пишем ПОСЛЕ reinit, чтобы во флэш ушёл уже применённый current_config. */
+    	if (g_cfg_save_pending) {
+    		g_cfg_save_pending = false;
+    		wdt_kick();
+    		cfg_flash_save(&current_config);
+    		wdt_kick();
+    	}
+
+    	/* Отложенный сброс к заводским (стереть флэш-конфиг). */
+    	if (g_cfg_erase_pending) {
+    		g_cfg_erase_pending = false;
+    		wdt_kick();
+    		cfg_flash_erase();
+    		wdt_kick();
     	}
 
 

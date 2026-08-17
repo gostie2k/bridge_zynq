@@ -38,7 +38,7 @@
  * модеме перед прошивкой: 1-й модем=1, 2-й=2, и т.д. Используется для адресных
  * broadcast-команд (0xA0 group=5) и кладётся в каждый 188-байтный радио-сегмент. */
 #ifndef DEVICE_ID_DEFAULT
-#define DEVICE_ID_DEFAULT  1
+#define DEVICE_ID_DEFAULT  2
 #endif
 
 #define RX_CORE_BASEADDR XPAR_PPOS_DSP_0_S01_AXI_BASEADDR

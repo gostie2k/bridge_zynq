@@ -1008,6 +1008,7 @@ static void handle_creg_exch(struct udp_pcb *upcb, uint8_t *data,
 
         struct device_config nc = current_config;
         int do_reinit = 0;
+        int do_ack    = 0;   /* команды без reinit (save/erase) — тоже шлём ACK */
 
         switch (subcmd) {
             case 0x00: /* set role: payload[0] = role (0=master,1=slave) */
@@ -1036,13 +1037,26 @@ static void handle_creg_exch(struct udp_pcb *upcb, uint8_t *data,
                 LOG1("[CMD 0xA0 g5] set MAC (all 3)\r\n");
                 break;
 
+            case 0x20: /* save: сохранить текущий конфиг во флэш QSPI (persist) */
+                device_request_save();
+                do_ack = 1;
+                LOG1("[CMD 0xA0 g5] save to flash requested\r\n");
+                break;
+
+            case 0x21: /* factory reset: стереть флэш-конфиг (вернутся дефолты) */
+                device_request_erase();
+                do_ack = 1;
+                LOG1("[CMD 0xA0 g5] factory reset (erase flash) requested\r\n");
+                break;
+
             default:
                 LOG1("[CMD 0xA0 g5] unknown subcmd=0x%02X\r\n", subcmd);
                 break;
         }
 
-        if (do_reinit) {
-            /* ACK ДО reinit (уйдёт со старого адреса): A0 04 <subcmd> tidHi tidLo 01 */
+        if (do_reinit || do_ack) {
+            /* ACK (для reinit — уйдёт со СТАРОГО адреса, до применения):
+             * A0 05 <subcmd> tidHi tidLo 01 */
             struct pbuf *ack = pbuf_alloc(PBUF_TRANSPORT, 6, PBUF_RAM);
             if (ack) {
                 uint8_t *r = (uint8_t *)ack->payload;
@@ -1054,8 +1068,9 @@ static void handle_creg_exch(struct udp_pcb *upcb, uint8_t *data,
                 r[5] = 0x01;
                 resp_send(upcb, ack, addr, port);
             }
-            device_request_reinit(&nc);
         }
+        if (do_reinit)
+            device_request_reinit(&nc);
     }
 }
 
