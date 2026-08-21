@@ -34,9 +34,9 @@
 //#define IS_MAKET_PKRV
 //#define IS_ZED_BOARD
 
-/* Уникальный ID устройства (НЕ зависит от роли). Задаётся вручную на КАЖДОМ
- * модеме перед прошивкой: 1-й модем=1, 2-й=2, и т.д. Используется для адресных
- * broadcast-команд (0xA0 group=5) и кладётся в каждый 188-байтный радио-сегмент. */
+/* Unique device ID (role-independent). Set manually on each modem before
+ * flashing: 1st modem=1, 2nd=2, etc. Used for addressed broadcast commands
+ * (0xA0 group=5) and embedded in every 188-byte radio segment. */
 #ifndef DEVICE_ID_DEFAULT
 #define DEVICE_ID_DEFAULT  2
 #endif
@@ -49,7 +49,7 @@
 
 
 #define AXI_CNTRL_REG_BASEADDR  XPAR_PPOS_DSP_0_S00_AXI_BASEADDR
-/* Пеленг (правки коллеги): отдельный AXI-слейв под импульсный сигнал */
+/* Peleng: separate AXI slave for the pulse signal */
 #define AXI_CNTRL_REG1_BASEADDR  XPAR_PPOS_DSP_0_S04_AXI_BASEADDR
 #define SPI_ENGINE_AD9361_BASEADDR  XPAR_PPOS_DSP_0_S02_AXI_BASEADDR
 #define SPI_ENGINE_NPU_BASEADDR  XPAR_PPOS_DSP_0_S03_AXI_BASEADDR
@@ -59,7 +59,7 @@
 
 
 /* ===================================================================
- *  Firmware version / role + WDT default (мерж WDT-стабильности)
+ *  Firmware version / role + WDT default (WDT-stability merge)
  * =================================================================== */
 #define FW_VERSION   "wdt-robust-r11"
 
@@ -76,7 +76,7 @@
 
 #define FW_BUILD_STR  FW_VERSION " " FW_ROLE_STR " (" __DATE__ " " __TIME__ ")"
 
-/* WDT включён по умолчанию (1=боевой). Рантайм-тумблер — UDP 0x90 0x4C. */
+/* WDT on by default (1=live). Runtime toggle - UDP 0x90 0x4C. */
 #ifndef WDT_ENABLED_DEFAULT
 #define WDT_ENABLED_DEFAULT  0
 #endif

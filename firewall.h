@@ -1,10 +1,10 @@
 /**
  * @file firewall.h
- * @brief Сетевой экран (пакетный фильтр) для порта 3 (радиоканал)
+ * @brief Firewall (packet filter) for port 3 (radio channel)
  *
- * Фильтрует исходящие пакеты (Ethernet → радио) по:
- *   - типу пакета (ARP, ICMP, TCP, UDP)
- *   - destination IP (с использованием маски, эталон = IP моста)
+ * Filters outgoing packets (Ethernet -> radio) by:
+ *   - packet type (ARP, ICMP, TCP, UDP)
+ *   - destination IP (masked, reference = bridge IP)
  */
 
 #ifndef FIREWALL_H_
@@ -15,39 +15,39 @@
 #include "lwip/ip4_addr.h"
 #include <stdint.h>
 
-/* ---------- Конфигурация фильтра ---------- */
+/* ---------- Filter config ---------- */
 typedef struct {
-    uint32_t ip_mask;       /* Сетевая маска для фильтрации dst IP */
-    uint8_t  arp_en;        /* Пропускать ARP:  0x01 = да, 0x00 = нет */
-    uint8_t  icmp_en;       /* Пропускать ICMP: 0x01 = да, 0x00 = нет */
-    uint8_t  tcp_en;        /* Пропускать TCP:  0x01 = да, 0x00 = нет */
-    uint8_t  udp_en;        /* Пропускать UDP:  0x01 = да, 0x00 = нет */
+    uint32_t ip_mask;       /* Network mask for dst IP filtering */
+    uint8_t  arp_en;        /* Pass ARP:  0x01 = yes, 0x00 = no */
+    uint8_t  icmp_en;       /* Pass ICMP: 0x01 = yes, 0x00 = no */
+    uint8_t  tcp_en;        /* Pass TCP:  0x01 = yes, 0x00 = no */
+    uint8_t  udp_en;        /* Pass UDP:  0x01 = yes, 0x00 = no */
 } firewall_config_t;
 
 /**
- * @brief Инициализация фильтра значениями по умолчанию.
- *        По умолчанию всё разрешено, маска = 0.0.0.0 (пропускает всё).
+ * @brief Init filter with defaults.
+ *        By default everything allowed, mask = 0.0.0.0 (pass all).
  */
 void firewall_init(void);
 
 /**
- * @brief Установить параметры фильтра.
+ * @brief Set filter parameters.
  */
 void firewall_set_config(uint32_t ip_mask,
                          uint8_t arp_en, uint8_t icmp_en,
                          uint8_t tcp_en, uint8_t udp_en);
 
 /**
- * @brief Получить текущую конфигурацию фильтра (копия).
+ * @brief Get current filter config (copy).
  */
 firewall_config_t firewall_get_config(void);
 
 /**
- * @brief Проверить, должен ли пакет быть пропущен через фильтр.
+ * @brief Check whether a packet should pass the filter.
  *
- * @param p          Ethernet-фрейм (pbuf с eth_hdr в начале)
- * @param bridge_nif Указатель на bridge_netif (для получения эталонного IP)
- * @return 1 — пропустить, 0 — заблокировать
+ * @param p          Ethernet frame (pbuf with eth_hdr at start)
+ * @param bridge_nif Pointer to bridge_netif (for the reference IP)
+ * @return 1 - pass, 0 - block
  */
 int firewall_filter(struct pbuf *p, struct netif *bridge_nif);
 

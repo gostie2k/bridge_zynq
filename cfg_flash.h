@@ -5,33 +5,33 @@
 #include "radio_params.h"
 
 /* ===================================================================
- *  Хранение конфига в QSPI-флэш (унификация, Фаза 3).
+ * Config storage in QSPI flash (unification, Phase 3).
  *
- *  Задача: выбранные роль/IP/MAC/ID должны переживать перезагрузку и
- *  пропадание питания. Конфиг лежит в двух копиях (A/B) в области флэш,
- *  заведомо выше загрузочного образа (BOOT.BIN). Каждая копия защищена
- *  магией + версией + счётчиком (seq) + CRC32. При загрузке берётся
- *  валидная копия с бо́льшим seq; при сохранении пишется в НЕ-последнюю
- *  копию — поэтому обрыв питания во время записи не портит вторую.
+ * Goal: chosen role/IP/MAC/ID must survive reboot and
+ * power loss. Config is kept in two copies (A/B) in a flash area
+ * safely above the boot image (BOOT.BIN). Each copy is protected
+ * by magic + version + seq counter + CRC32. Load picks the
+ * valid copy with the larger seq; save writes to the NON-latest
+ * copy - so a power cut during a write does not corrupt the other.
  * =================================================================== */
 
-/* Инициализировать QSPI-контроллер. Вызывать один раз при старте.
- * return 0 — ок, !=0 — ошибка (персистентность недоступна). */
+/* Init QSPI controller. Call once at startup.
+ * return 0 - ok, !=0 - error (persistence unavailable). */
 int cfg_flash_init(void);
 
-/* Прочитать профиль из флэш. При успехе заполняет *net и *radio, возвращает 1.
- * Возвращает 0, если валидной копии нет (обе пустые/битые) —
- * тогда вызывающий оставляет дефолты из прошивки. */
+/* Read the profile from flash. On success fills *net and *radio, returns 1.
+ * Returns 0 if no valid copy exists (both empty/corrupt) -
+ * then the caller keeps firmware defaults. */
 int cfg_flash_load(struct device_config *net, struct radio_params *radio);
 
-/* Сохранить профиль во флэш (стирание сектора + запись страницы + верификация).
- * Пишет сеть + радио одной записью. ⚠ Блокирует ~1 с (стирание сектора).
- * Вызывать из main loop, не из колбэка. return 0 — ок, !=0 — ошибка. */
+/* Save the profile to flash (sector erase + page program + verify).
+ * Writes network + radio in one record. WARNING: blocks ~1 s (sector erase).
+ * Call from main loop, not from a callback. return 0 - ok, !=0 - error. */
 int cfg_flash_save(const struct device_config *net, const struct radio_params *radio);
 
-/* Стереть обе копии (сброс к заводским настройкам: следующая загрузка
- * не найдёт валидного конфига и возьмёт дефолты прошивки).
- * return 0 — ок, !=0 — ошибка. */
+/* Erase both copies (factory reset: next boot finds no valid
+ * config and takes firmware defaults).
+ * return 0 - ok, !=0 - error. */
 int cfg_flash_erase(void);
 
 #endif /* CFG_FLASH_H_ */

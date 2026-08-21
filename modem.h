@@ -572,9 +572,9 @@ void modem_init();
 
 /**
  * @struct peleng
- * @brief Параметры импульсного сигнала (пеленг). Пишутся по AXI в
+ * @brief Pulse signal (peleng) parameters. Written over AXI to
  *        AXI_CNTRL_REG1_BASEADDR + PELENG_PAR_OFFSET.
- *        Управление: UDP 0xA0 group=4.
+ *        Control: UDP 0xA0 group=4.
  */
 #pragma pack(push, 1)
 struct peleng {

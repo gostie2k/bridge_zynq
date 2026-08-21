@@ -10,8 +10,8 @@
 #include "xil_exception.h"
 
 #ifdef WDT_DISABLED
-/* Под отладкой — все API превращаются в заглушки.
- * Не убираем символы целиком, чтобы линкер не ругался. */
+/* Under debug - all APIs become stubs.
+ * Do not remove the symbols entirely, so the linker does not complain. */
 void wdt_capture_reboot_status(void) {}
 int  wdt_init(struct XScuGic *gic) { (void)gic; xil_printf("[WDT] disabled (debug build)\r\n"); return 0; }
 void wdt_start(void) {}
@@ -36,17 +36,17 @@ const char *wdt_section_name(uint8_t s) { (void)s; return "?"; }
 /* ===================================================================
  *  SLCR REBOOT_STATUS (0xF8000258), Zynq-7000 UG585 §26.4
  *  ------------------------------------------------------------------
- *  Биты причины последнего ресета занимают [22..16]:
+ * Bits of the last reset cause occupy [22..16]:
  *    bit 22 — POR_INT       (power-on reset)
  *    bit 21 — SWDT_RST_INT  (System WDT — xwdtps)
- *    bit 20 — AWDT0_RST_INT (CPU0 SCU WDT — xscuwdt) ← наш кейс
+ *   bit 20 - AWDT0_RST_INT (CPU0 SCU WDT - xscuwdt) <- our case
  *    bit 19 — AWDT1_RST_INT (CPU1 SCU WDT)
- *    bit 18 — SRST_B_INT    (внешний reset pin)
+ *   bit 18 - SRST_B_INT    (external reset pin)
  *    bit 17 — DBG_RST_INT   (debugger)
  *    bit 16 — SLC_RST_INT   (soft reset via SLCR.PSS_RST_CTRL)
- *  Биты [15:0] и [23] — scratch / boot state, не трогаем.
- *  Биты [31:24] — должны читаться нулями, но при POR на некоторых
- *  ревизиях BootROM могут содержать мусор.
+ * Bits [15:0] and [23] - scratch / boot state, do not touch.
+ * Bits [31:24] - should read as zero, but on POR on some
+ * BootROM revisions may hold garbage.
  * =================================================================== */
 #define SLCR_BASE              0xF8000000u
 #define SLCR_UNLOCK_OFFSET     0x00000008u
@@ -64,25 +64,25 @@ const char *wdt_section_name(uint8_t s) { (void)s; return "?"; }
 #define SLCR_BIT_POR           (1u << 22)
 #define SLCR_REASON_MASK       (0x7Fu << 16)   /* [22:16] */
 
-/* SLCR.PSS_RST_CTRL — запись 1 в bit 0 вызывает полный PS soft reset с
- * повторным запуском FSBL. На этой плате путь работает надёжно. */
+/* SLCR.PSS_RST_CTRL - writing 1 to bit 0 triggers a full PS soft reset with
+ * FSBL re-run. On this board the path works reliably. */
 #define SLCR_PSS_RST_CTRL_OFF  0x00000200u
 #define SLCR_SOFT_RST_BIT      0x00000001u
 
-/* Магический флаг в scratch-битах [15:0] REBOOT_STATUS — выставляется ISR'ом
- * перед SLCR soft reset, чтобы после перезагрузки отличить "ресет от WDT"
- * от обычного soft reset.  Bit 4 не используется FSBL Xilinx'а.
+/* Magic flag in scratch bits [15:0] of REBOOT_STATUS - set by the ISR
+ * before the SLCR soft reset, so after reboot we can tell "WDT reset"
+ * from an ordinary soft reset. Bit 4 is not used by Xilinx FSBL.
  *
- * Дополнительная crash-info упакована в scratch-биты:
- *   bit  4       — WDT_MAGIC (всегда 1 если crash через наш ISR)
- *   bits 3..0    — starve_mask на момент crash'а (HB_MAIN/LWIP/TX/RX)
- *   bits 11..8   — последняя секция main loop (wdt_section_t, 0..15)
- *   bits 15..12  — индекс старейшего HB при crash'е (0..3, 0xF=нет данных)
+ * Extra crash-info is packed into scratch bits:
+ *   bit  4       - WDT_MAGIC (always 1 if crash via our ISR)
+ *   bits 3..0    - starve_mask at crash time (HB_MAIN/LWIP/TX/RX)
+ *   bits 11..8   - last main-loop section (wdt_section_t, 0..15)
+ *   bits 15..12  - index of oldest HB at crash (0..3, 0xF=no data)
  *   bits 7..5    — reserved
  *
- * После reboot wdt_capture_reboot_status() декодирует это в g_stats_crash_*.
- * Биты scratch'а scratch'ются FSBL'ом не всегда — на Xilinx Zynq FSBL
- * сохраняет [15:0] (он использует только биты [23:16] для своих причин).
+ * After reboot wdt_capture_reboot_status() decodes this into g_stats_crash_*.
+ * Scratch bits are not always preserved by FSBL - on Xilinx Zynq FSBL
+ * keeps [15:0] (it uses only [23:16] for its own causes).
  */
 #define SLCR_WDT_MAGIC_BIT     (1u << 4)
 #define SLCR_CRASH_STARVE_MASK 0x0000000Fu  /* bits 3..0 */
@@ -96,12 +96,12 @@ const char *wdt_section_name(uint8_t s) { (void)s; return "?"; }
  *  XScuWdt config
  *  ------------------------------------------------------------------
  *  SCU watchdog clock = CPU_FREQ/2 (PERIPHCLK).
- *  Делитель (prescaler) 0..255, реальный делитель = prescaler+1.
- *  Тиков на ms = (PERIPHCLK / (prescaler+1)) / 1000.
+ * Prescaler 0..255, actual divider = prescaler+1.
+ * Ticks per ms = (PERIPHCLK / (prescaler+1)) / 1000.
  *
- *  Берём максимальный prescaler 255 → делитель 256 →
- *  при PERIPHCLK = 333 MHz получаем ~1302 тика/ms.
- *  WDT_TIMEOUT_MS=2000 → ~2.6M тиков, влезает в 32-бит counter.
+ * Take max prescaler 255 -> divider 256 ->
+ * at PERIPHCLK = 333 MHz gives ~1302 ticks/ms.
+ * WDT_TIMEOUT_MS=2000 -> ~2.6M ticks, fits in a 32-bit counter.
  * =================================================================== */
 #define WDT_PRESCALER          255u
 
@@ -111,17 +111,17 @@ static int     g_wdt_started = 0;
 static uint32_t g_wdt_load_value = 0;
 
 /* ===================================================================
- *  UART flush — ждём пока TX FIFO опустеет, чтобы последний лог
- *  (типа "[WDT] TIMEOUT") долетел до терминала ДО reset'а.
+ * UART flush - wait for TX FIFO to empty so the last log
+ * (like "[WDT] TIMEOUT") reaches the terminal BEFORE reset.
  *  ------------------------------------------------------------------
  *  XUartPs Channel Status Register (SR) at offset 0x2C:
- *    bit 3 (TXEMPTY) = 1 когда TX FIFO пустой
- *    bit 11 (TACTIVE) = 1 пока идёт передача
- *  Ждём оба условия. С таймаутом — чтобы не виснуть навсегда если
- *  UART вдруг сломан.
+ *   bit 3 (TXEMPTY) = 1 when TX FIFO is empty
+ *   bit 11 (TACTIVE) = 1 while transmitting
+ * Wait for both. With a timeout - so we do not hang forever if
+ * UART is somehow broken.
  * =================================================================== */
 #ifndef STDOUT_BASEADDRESS
-#define STDOUT_BASEADDRESS 0xE0001000u   /* fallback на UART1 */
+#define STDOUT_BASEADDRESS 0xE0001000u   /* fallback to UART1 */
 #endif
 #define XUARTPS_SR_OFFSET   0x2Cu
 #define XUARTPS_SR_TXEMPTY  (1u << 3)
@@ -129,7 +129,7 @@ static uint32_t g_wdt_load_value = 0;
 
 static void wdt_uart_flush(void)
 {
-    /* ~10ms таймаут на CPU 666MHz: ~6.6M итераций цикла. */
+    /* ~10ms timeout on CPU 666MHz: ~6.6M loop iterations. */
     volatile uint32_t spin = 6600000u;
     while (spin--) {
         uint32_t sr = Xil_In32(STDOUT_BASEADDRESS + XUARTPS_SR_OFFSET);
@@ -139,8 +139,8 @@ static void wdt_uart_flush(void)
     }
 }
 
-/* Запись crash-info в SLCR scratch перед reset'ом. Распаковывается после
- * reboot в wdt_capture_reboot_status. */
+/* Write crash-info to SLCR scratch before reset. Unpacked after
+ * reboot in wdt_capture_reboot_status. */
 static void wdt_write_crash_to_slcr(uint8_t section, uint8_t oldest_hb, uint8_t starve_mask)
 {
     uint32_t crash_bits = SLCR_WDT_MAGIC_BIT
@@ -152,54 +152,54 @@ static void wdt_write_crash_to_slcr(uint8_t section, uint8_t oldest_hb, uint8_t 
     uint32_t rs = Xil_In32(SLCR_BASE + SLCR_REBOOT_STATUS_OFF);
     rs = (rs & ~SLCR_CRASH_INFO_BITS) | crash_bits;
     Xil_Out32(SLCR_BASE + SLCR_REBOOT_STATUS_OFF, rs);
-    /* SLCR оставляем разблокированным — следом будет write в PSS_RST_CTRL. */
+    /* Leave SLCR unlocked - a write to PSS_RST_CTRL follows. */
 }
 
-/* Триггер полного PS soft reset через SLCR.PSS_RST_CTRL. SLCR scratch
- * с crash-info должен быть записан перед вызовом — wdt_write_crash_to_slcr(). */
+/* Trigger full PS soft reset via SLCR.PSS_RST_CTRL. SLCR scratch
+ * with crash-info must be written before the call - wdt_write_crash_to_slcr(). */
 static void wdt_trigger_soft_reset(void)  __attribute__((noreturn));
 static void wdt_trigger_soft_reset(void)
 {
-    /* Маскируем дальнейшие прерывания — мы уже не вернёмся */
+    /* Mask further interrupts - we will not return */
     Xil_ExceptionDisable();
 
-    /* Дожидаемся пока последняя строка вылетит из UART TX FIFO */
+    /* Wait for the last line to leave the UART TX FIFO */
     wdt_uart_flush();
 
-    /* SLCR может быть уже разблокирован (после wdt_write_crash_to_slcr),
-     * но повторный unlock безопасен. */
+    /* SLCR may already be unlocked (after wdt_write_crash_to_slcr),
+     * but a repeated unlock is safe. */
     Xil_Out32(SLCR_BASE + SLCR_UNLOCK_OFFSET, SLCR_UNLOCK_KEY);
 
-    /* Запускаем soft reset PS — FSBL re-run, peripherals reinit. */
+    /* Start PS soft reset - FSBL re-run, peripherals reinit. */
     Xil_Out32(SLCR_BASE + SLCR_PSS_RST_CTRL_OFF, SLCR_SOFT_RST_BIT);
     __asm__ volatile("dsb sy");
 
-    /* Сюда не должны попасть, но крутимся пока reset не сработает */
+    /* Should not get here, but spin until reset takes effect */
     for (;;) { __asm__ volatile("nop"); }
 }
 
-/* ISR: вызывается при истечении WDT counter.
+/* ISR: called when the WDT counter expires.
  *
- * Снимает crash-snapshot:
- *   - текущая main_section
- *   - возраст каждого HB
- *   - какой HB старее всех (главный подозреваемый)
- *   - bitmask тех HB которые протухли (превысили свой *_MAX_MS)
- * Печатает кратко в UART (best-effort — flush'нется в trigger_soft_reset
- * перед сбросом) и пакует в SLCR scratch для извлечения после reboot.
+ * Takes a crash snapshot:
+ *   - current main_section
+ *   - age of each HB
+ *   - which HB is oldest (main suspect)
+ *   - bitmask of HBs that went stale (exceeded their *_MAX_MS)
+ * Prints briefly to UART (best-effort - flushed in trigger_soft_reset
+ * before reset) and packs into SLCR scratch for retrieval after reboot.
  *
- * NB: вход в ISR требует чтобы в CPSR были разрешены IRQ — если основной
- * код заблокировал прерывания, ISR не отработает. В этом случае remedy
- * нет (нужен системный WDT). */
+ * NB: entering the ISR requires IRQs enabled in CPSR - if the main
+ * code disabled interrupts, the ISR will not run. In that case there is no
+ * remedy (a system WDT is needed). */
 
-/* Heartbeat'ы и section-marker нужны ISR'у — определения нужно дать до
- * ISR'а. Один writer на каждый heartbeat → volatile store без блокировок. */
+/* Heartbeats and section-marker are needed by the ISR - define before the
+ * ISR. One writer per heartbeat -> volatile store without locks. */
 static volatile XTime g_hb_main = 0;
 static volatile XTime g_hb_lwip = 0;
 static volatile XTime g_hb_tx   = 0;
 static volatile XTime g_hb_rx   = 0;
 
-/* Текущая секция main loop — пишется через wdt_section_mark(), читается в ISR. */
+/* Current main-loop section - written via wdt_section_mark(), read in ISR. */
 static volatile uint8_t g_main_section = WDT_SEC_NONE;
 
 void wdt_section_mark(wdt_section_t s) { g_main_section = (uint8_t)s; }
@@ -226,8 +226,8 @@ const char *wdt_section_name(uint8_t s) {
     }
 }
 
-/* COUNTS_PER_SECOND из xtime_l.h = CPU_FREQ/2. ticks_per_ms = COUNTS_PER_SECOND/1000.
- * Helper нужен ISR'у — определяем до ISR'а. */
+/* COUNTS_PER_SECOND from xtime_l.h = CPU_FREQ/2. ticks_per_ms = COUNTS_PER_SECOND/1000.
+ * Helper is needed by the ISR - defined before the ISR. */
 static inline uint64_t ms_to_ticks(uint32_t ms) {
     return ((uint64_t)COUNTS_PER_SECOND * (uint64_t)ms) / 1000ULL;
 }
@@ -239,16 +239,16 @@ static void wdt_isr(void *arg)
 {
     XScuWdt *wdt = (XScuWdt *)arg;
 
-    /* Сбрасываем event flag в ISR register (write-1-to-clear) */
+    /* Clear the event flag in the ISR register (write-1-to-clear) */
     XScuWdt_WriteReg(wdt->Config.BaseAddr,
                      XSCUWDT_ISR_OFFSET,
                      XSCUWDT_ISR_EVENT_FLAG_MASK);
 
-    /* --- Снимаем snapshot heartbeat'ов --- */
+    /* --- Take a heartbeat snapshot --- */
     XTime now;
     XTime_GetTime(&now);
 
-    /* Возрасты в мс. Порядок 0=MAIN 1=LWIP 2=TX 3=RX. */
+    /* Ages in ms. Order 0=MAIN 1=LWIP 2=TX 3=RX. */
     uint32_t hb_age_ms[4];
     hb_age_ms[0] = ticks_to_ms((uint64_t)(now - g_hb_main));
     hb_age_ms[1] = ticks_to_ms((uint64_t)(now - g_hb_lwip));
@@ -261,7 +261,7 @@ static void wdt_isr(void *arg)
     if (hb_age_ms[2] > WDT_HB_TX_MAX_MS  ) starve_mask |= WDT_HB_BIT_TX;
     if (hb_age_ms[3] > WDT_HB_RX_MAX_MS  ) starve_mask |= WDT_HB_BIT_RX;
 
-    /* Старейший HB — независимо от того, протух он формально или нет. */
+    /* Oldest HB - regardless of whether it is formally stale or not. */
     uint8_t oldest_idx = 0;
     uint32_t oldest_age = hb_age_ms[0];
     for (int i = 1; i < 4; i++) {
@@ -276,8 +276,8 @@ static void wdt_isr(void *arg)
 
     static const char *hb_names[4] = { "MAIN", "LWIP", "TX", "RX" };
 
-    /* Логируем кратко. xil_printf тут не быстрый, но wdt_uart_flush в
-     * trigger_soft_reset подождёт пока всё долетит. */
+    /* Log briefly. xil_printf is not fast here, but wdt_uart_flush in
+     * trigger_soft_reset will wait until everything is out. */
     xil_printf("\r\n[WDT] TIMEOUT  sect=%s  oldest=%s age=%lums  starve=0x%X\r\n",
                wdt_section_name(section),
                hb_names[oldest_idx],
@@ -287,7 +287,7 @@ static void wdt_isr(void *arg)
                (unsigned long)hb_age_ms[0], (unsigned long)hb_age_ms[1],
                (unsigned long)hb_age_ms[2], (unsigned long)hb_age_ms[3]);
 
-    /* Упаковываем в SLCR scratch, читается после reboot. */
+    /* Pack into SLCR scratch, read after reboot. */
     wdt_write_crash_to_slcr(section, oldest_idx, (uint8_t)starve_mask);
 
     wdt_trigger_soft_reset();
@@ -300,14 +300,14 @@ static volatile uint32_t g_stats_starve_count = 0;
 static volatile uint32_t g_stats_last_starve_mask = 0;
 static XTime             g_start_time = 0;
 
-/* Crash-info извлечённая из SLCR scratch после reboot. valid=0 пока
- * wdt_capture_reboot_status() не прочитала или если magic-флаг не стоял. */
+/* Crash-info extracted from SLCR scratch after reboot. valid=0 until
+ * wdt_capture_reboot_status() has not read it or if the magic flag was unset. */
 static volatile uint8_t  g_stats_crash_section     = 0;
 static volatile uint8_t  g_stats_crash_oldest_hb   = 0;
 static volatile uint8_t  g_stats_crash_starve_mask = 0;
 static volatile uint8_t  g_stats_crash_valid       = 0;
 
-/* Heartbeat'ы, section, ticks_to_ms — определены выше (перед ISR'ом). */
+/* Heartbeats, section, ticks_to_ms - defined above (before the ISR). */
 
 /* ===================================================================
  *  REBOOT_STATUS
@@ -317,17 +317,17 @@ void wdt_capture_reboot_status(void)
     uint32_t st = Xil_In32(SLCR_BASE + SLCR_REBOOT_STATUS_OFF);
     g_stats_reboot_status = st;
 
-    /* WDT-ресет признаём если:
-     *   - стоит наш магический флаг (SLCR soft reset из ISR), ИЛИ
-     *   - стоят сами hardware-биты AWDT0/SWDT (на случай если WDT
-     *     отработал в watchdog-mode без ISR — fallback).
-     * Просто SLC_RST мы НЕ считаем WDT-ресетом — это могла быть просто
-     * перезагрузка пользователем. */
+    /* We treat it as a WDT reset if:
+     *   - our magic flag is set (SLCR soft reset from ISR), OR
+     *   - the hardware AWDT0/SWDT bits are set (in case WDT
+     * ran in watchdog-mode without ISR - fallback).
+     * A plain SLC_RST we do NOT count as a WDT reset - it could be just a
+     * user reboot. */
     int magic = (st & SLCR_WDT_MAGIC_BIT) ? 1 : 0;
     int hw_bits = (st & (SLCR_BIT_AWDT0_RST | SLCR_BIT_SWDT_RST)) ? 1 : 0;
     g_stats_wdt_reset_flag = (magic || hw_bits) ? 1 : 0;
 
-    /* Извлекаем crash-info из scratch-битов если magic стоит. */
+    /* Extract crash-info from scratch bits if magic is set. */
     if (magic) {
         g_stats_crash_section     = (uint8_t)((st & SLCR_CRASH_SECTION_MASK) >> SLCR_CRASH_SECTION_SHIFT);
         g_stats_crash_oldest_hb   = (uint8_t)((st & SLCR_CRASH_OLDEST_MASK)  >> SLCR_CRASH_OLDEST_SHIFT);
@@ -340,9 +340,9 @@ void wdt_capture_reboot_status(void)
         g_stats_crash_valid       = 0;
     }
 
-    /* Очищаем биты причины [22:16] + наш магический флаг + crash-info, чтобы
-     * следующий ресет имел корректную причину. Биты "sticky" — пишем 0
-     * после unlock'а. */
+    /* Clear the cause bits [22:16] + our magic flag + crash-info, so
+     * the next reset has a correct cause. Bits are sticky - write 0
+     * after unlock. */
     Xil_Out32(SLCR_BASE + SLCR_UNLOCK_OFFSET, SLCR_UNLOCK_KEY);
     Xil_Out32(SLCR_BASE + SLCR_REBOOT_STATUS_OFF,
               st & ~(SLCR_REASON_MASK | SLCR_CRASH_INFO_BITS));
@@ -384,8 +384,8 @@ int wdt_init(struct XScuGic *gic)
         return -2;
     }
 
-    /* Расчёт load value:
-     *   PERIPHCLK = COUNTS_PER_SECOND (тот же делитель /2 от CPU_FREQ)
+    /* Compute load value:
+     * PERIPHCLK = COUNTS_PER_SECOND (same /2 divider from CPU_FREQ)
      *   ticks_per_sec_wdt = PERIPHCLK / (WDT_PRESCALER+1)
      *   load = ticks_per_sec_wdt * WDT_TIMEOUT_MS / 1000
      */
@@ -394,29 +394,29 @@ int wdt_init(struct XScuGic *gic)
     if (load64 > 0xFFFFFFFFULL) load64 = 0xFFFFFFFFULL;
     g_wdt_load_value = (uint32_t)load64;
 
-    /* Конфигурация control register:
-     *   prescaler в [15:8]
-     *   IT_ENABLE  = 1 (interrupt при counter=0)
-     *   AUTO_RELOAD= 0 (один выстрел, нам не нужны повторные срабатывания
-     *                   после первого — ISR сразу триггерит reset)
-     *   WD_MODE    = 0 (TIMER mode — на Zynq-7000 watchdog mode
-     *                   сбрасывает только CPU, не весь PS. Нам нужен
-     *                   полный PS soft reset через SLCR из ISR.)
-     *   ENABLE     = 0 пока — взведём в wdt_start()
+    /* Control register configuration:
+     *   prescaler in [15:8]
+     *   IT_ENABLE  = 1 (interrupt when counter=0)
+     *   AUTO_RELOAD= 0 (one-shot, we do not need repeats
+     *                after the first - ISR triggers reset immediately)
+     *   WD_MODE    = 0 (TIMER mode - on Zynq-7000 watchdog mode
+     *                resets only the CPU, not the whole PS. We need
+     *                a full PS soft reset via SLCR from the ISR.)
+     *   ENABLE     = 0 for now - set in wdt_start()
      */
     uint32_t ctrl = 0;
     ctrl |= ((uint32_t)WDT_PRESCALER << 8) & XSCUWDT_CONTROL_PRESCALER_MASK;
     ctrl |= XSCUWDT_CONTROL_IT_ENABLE_MASK;
-    /* WD_MODE и AUTO_RELOAD остаются 0 */
+    /* WD_MODE and AUTO_RELOAD stay 0 */
     XScuWdt_SetControlReg(&g_wdt, ctrl);
 
-    /* Очищаем потенциально висящий event flag (после reset мог остаться) */
+    /* Clear a possibly pending event flag (may remain after reset) */
     XScuWdt_WriteReg(g_wdt.Config.BaseAddr,
                      XSCUWDT_ISR_OFFSET,
                      XSCUWDT_ISR_EVENT_FLAG_MASK);
 
-    /* Регистрируем ISR в SCU GIC.
-     * SCU WDT IRQ — это private peripheral interrupt (PPI), ID=30. */
+    /* Register the ISR in the SCU GIC.
+     * SCU WDT IRQ is a private peripheral interrupt (PPI), ID=30. */
     XScuGic *p_gic = (XScuGic *)gic;
     rc = XScuGic_Connect(p_gic, XPAR_SCUWDT_INTR,
                          (Xil_ExceptionHandler)wdt_isr,
@@ -508,7 +508,7 @@ void wdt_kick(void)
     } else {
         g_stats_starve_count++;
         g_stats_last_starve_mask = starve_mask;
-        /* Лог не чаще чем раз в ~1 сек, чтобы не спамить UART до ресета */
+        /* Log at most once per ~1 sec, to avoid spamming UART before reset */
         static XTime last_log = 0;
         if (ticks_to_ms((uint64_t)(now - last_log)) > 1000u) {
             xil_printf("[WDT] STARVE mask=0x%02X — will reset soon\r\n",
@@ -524,27 +524,27 @@ uint32_t wdt_get_progress_kick_calls(void) { return g_progress_kick_calls; }
 
 void wdt_progress_kick(void)
 {
-    g_progress_kick_calls++;   /* считаем ДО троттла — это и есть «per-frame путь крутится» */
+    g_progress_kick_calls++;   /* count BEFORE throttle - this is the "per-frame path is running" signal */
     if (!g_wdt_started) return;
 
     XTime now;
     XTime_GetTime(&now);
 
-    /* Троттл: не чаще раза в WDT_PROGRESS_KICK_MS, чтобы на каждый пакет не
-     * молотить RestartWdt. last инициализируется нулём → первый вызов кикнет. */
+    /* Throttle: at most once per WDT_PROGRESS_KICK_MS, so we do not
+     * hammer RestartWdt on every packet. last inits to zero -> first call kicks. */
     static XTime last = 0;
     if (ticks_to_ms((uint64_t)(now - last)) < WDT_PROGRESS_KICK_MS) return;
     last = now;
 
-    /* Прогресс есть → main жив. Освежаем MAIN-heartbeat и идём через обычный
-     * wdt_kick(): он проверит включённые HB (сейчас только MAIN, теперь свежий)
-     * и перезарядит таймер. Прочие HB не проверяются → ложного starve нет. */
+    /* Progress exists -> main is alive. Refresh MAIN heartbeat and go through normal
+     * wdt_kick(): it checks enabled HBs (currently only MAIN, now fresh)
+     * and reloads the timer. Other HBs are not checked -> no false starve. */
     g_hb_main = now;
     wdt_kick();
 }
 
 /* ===================================================================
- *  Heartbeats — дёшево: один XTime read + volatile store
+ * Heartbeats - cheap: one XTime read + volatile store
  * =================================================================== */
 void wdt_hb_main(void) { XTime t; XTime_GetTime(&t); g_hb_main = t; }
 void wdt_hb_lwip(void) { XTime t; XTime_GetTime(&t); g_hb_lwip = t; }
@@ -573,19 +573,19 @@ void wdt_get_stats(wdt_stats_t *out)
 }
 
 /* ===================================================================
- *  Simulated hang — для тестирования
+ * Simulated hang - for testing
  *  ------------------------------------------------------------------
- *  Кикать НЕ будем, heartbeat'ы тоже не дёргаем → через WDT_TIMEOUT_MS
- *  WDT counter достигнет 0 → ISR → wdt_trigger_soft_reset → PS reset.
+ * We do NOT kick, and do not touch heartbeats -> after WDT_TIMEOUT_MS
+ * WDT counter reaches 0 -> ISR -> wdt_trigger_soft_reset -> PS reset.
  *
- *  Компилируй с -DWDT_DIAG_HANG чтобы получить verbose-диагностику
- *  состояния WDT/GIC/CPSR в hang-цикле — полезно когда reset не
- *  происходит и нужно понять причину.
+ * Build with -DWDT_DIAG_HANG for verbose diagnostics of
+ * WDT/GIC/CPSR state in the hang loop - useful when reset does
+ * not happen and you need to find the cause.
  * =================================================================== */
 void wdt_simulate_hang(void)
 {
 #ifdef WDT_DIAG_HANG
-    /* Прямые адреса регистров SCU WDT и GIC distributor. */
+    /* Direct SCU WDT and GIC distributor register addresses. */
     const uint32_t WDT_BASE      = 0xF8F00620u;
     const uint32_t WDT_LOAD_OFF  = 0x00u;
     const uint32_t WDT_COUNT_OFF = 0x04u;
@@ -655,8 +655,8 @@ void wdt_simulate_hang(void)
 #endif
 }
 
-/* Прямой триггер soft reset, минуя ISR/WDT. Ставит magic-флаг без crash-info
- * (section=NONE, oldest_hb=0xF=нет данных, starve_mask=0). */
+/* Direct soft-reset trigger, bypassing ISR/WDT. Sets the magic flag without crash-info
+ * (section=NONE, oldest_hb=0xF=no data, starve_mask=0). */
 void wdt_force_reset_now(void)
 {
     xil_printf("[WDT] force_reset_now — triggering SLCR.PSS_RST_CTRL directly\r\n");

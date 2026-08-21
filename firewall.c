@@ -1,6 +1,6 @@
 /**
  * @file firewall.c
- * @brief Реализация сетевого экрана для порта 3 (радиоканал)
+ * @brief Firewall implementation for port 3 (radio channel)
  */
 
 #include "firewall.h"
@@ -11,7 +11,7 @@
 #include "xil_printf.h"
 #include <string.h>
 
-/* Глобальная конфигурация фильтра */
+/* Global filter config */
 static firewall_config_t fw_cfg;
 
 
@@ -25,7 +25,7 @@ static firewall_config_t fw_cfg;
 
 void firewall_init(void)
 {
-    /* По умолчанию: всё разрешено, маска 0 — не фильтруем по IP */
+    /* Default: everything allowed, mask 0 - no IP filtering */
     fw_cfg.ip_mask  = 0x00000000;
     fw_cfg.arp_en   = 0x01;
     fw_cfg.icmp_en  = 0x01;
@@ -54,31 +54,31 @@ firewall_config_t firewall_get_config(void)
     return fw_cfg;
 }
 
-/* ========== Фильтрация ========== */
+/* ========== Filtering ========== */
 
 /**
- * Логика фильтрации:
+ * Filtering logic:
  *
  * 1. EtherType == 0x0806 (ARP):
- *    → пропускаем если arp_en == 0x01
+ *    -> pass if arp_en == 0x01
  *
  * 2. EtherType == 0x0800 (IPv4):
- *    a) Проверяем destination IP по маске:
+ *    a) Check destination IP against mask:
  *       (dst_ip & mask) == (bridge_ip & mask)
- *       Если mask == 0 — проверка пропускается (пропускаем всё).
- *       Broadcast (dst = 255.255.255.255) всегда пропускается.
- *    b) Проверяем протокол:
- *       - ICMP (1)  → icmp_en
- *       - TCP  (6)  → tcp_en
- *       - UDP  (17) → udp_en
- *       - иное      → блокируем
+ *       If mask == 0 - check is skipped (pass all).
+ *       Broadcast (dst = 255.255.255.255) always passes.
+ *    b) Check protocol:
+ *       - ICMP (1)  -> icmp_en
+ *       - TCP  (6)  -> tcp_en
+ *       - UDP  (17) -> udp_en
+ *       - other     -> block
  *
- * 3. Все остальные EtherType → блокируем
+ * 3. All other EtherTypes -> block
  */
 int firewall_filter(struct pbuf *p, struct netif *bridge_nif)
 {
     if (p == NULL || p->len < sizeof(struct eth_hdr)) {
-    	FW_BLOCK("too short"); /* слишком короткий — блокируем */
+    	FW_BLOCK("too short"); /* too short - block */
     }
 
     struct eth_hdr *ethhdr = (struct eth_hdr *)p->payload;
@@ -87,7 +87,7 @@ int firewall_filter(struct pbuf *p, struct netif *bridge_nif)
     /* --- ARP --- */
     if (eth_type == ETHTYPE_ARP) {
         if (fw_cfg.arp_en != 0x01) FW_BLOCK("ARP disabled");
-        return 1;  // ARP разрешён
+        return 1;  // ARP allowed
     }
 
     /* --- IPv4 --- */

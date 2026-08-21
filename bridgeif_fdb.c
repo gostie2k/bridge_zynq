@@ -46,7 +46,7 @@
 #include "lwip/mem.h"
 #include "lwip/timeouts.h"
 #include <string.h>
-#include "watchdog.h"   /* wdt_progress_kick — робастность WDT на приёмной стороне */
+#include "watchdog.h"   /* wdt_progress_kick - WDT robustness on RX side */
 
 #define BRIDGEIF_AGE_TIMER_MS 1000
 
@@ -87,9 +87,9 @@ bridgeif_fdb_update_src(void *fdb_ptr, struct eth_addr *src_addr, u8_t port_idx)
   bridgeif_dfdb_t *fdb = (bridgeif_dfdb_t *)fdb_ptr;
   BRIDGEIF_DECL_PROTECT(lev);
 
-  /* Робастность WDT: эта функция вызывается на КАЖДЫЙ входящий кадр изнутри
-   * xemacif_input — кикаем WDT по факту прогресса (троттл внутри), чтобы
-   * приёмная сторона под нагрузкой не давала ложных ребутов. */
+  /* WDT robustness: called for every incoming frame from xemacif_input -
+   * kick WDT on progress (throttled inside) so the RX side under load
+   * does not trigger false reboots. */
   wdt_progress_kick();
 
   BRIDGEIF_READ_PROTECT(lev);

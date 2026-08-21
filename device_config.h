@@ -12,37 +12,37 @@ typedef enum {
 struct device_config {
     uint8_t  role;            /* role_t */
 
-    uint16_t device_id;       /* уникальный ID устройства (для адресных broadcast-команд).
-                               * Временно: master=1, slave=2. Позже — из flash UID. */
+    uint16_t device_id;       /* unique device ID (for addressed broadcast commands).
+                               * Temporary: master=1, slave=2. Later - from flash UID. */
 
-    uint8_t  ip[4];           /* свой IP (bridge_netif) */
+    uint8_t  ip[4];           /* own IP (bridge_netif) */
     uint8_t  netmask[4];
     uint8_t  gateway[4];
-    uint8_t  peer_ip[4];      /* адрес пира (RemoteAddr) */
+    uint8_t  peer_ip[4];      /* peer address (RemoteAddr) */
 
     uint8_t  mac1[6];         /* GEM, port1 */
     uint8_t  mac3[6];         /* radio, vport3 */
     uint8_t  bridge_mac[6];   /* MAC bridge_netif */
 };
 
-/* Единственный экземпляр конфига, действующий в рантайме. */
+/* The single config instance live at runtime. */
 extern struct device_config current_config;
 
-/* Заполнить cfg дефолтами для заданной роли. */
+/* Fill cfg with defaults for the given role. */
 void config_set_defaults(struct device_config *cfg, role_t role);
 
-/* Заполнить current_config дефолтами, роль берётся из IS_MASTER/IS_SLAVE. */
+/* Fill current_config with defaults, role taken from IS_MASTER/IS_SLAVE. */
 void config_init_defaults_from_build(void);
 
-/* Запросить применение нового конфига (смена роли/сети).
- * Безопасно вызывать из UDP-колбэка: сам reinit отложен до main loop. */
+/* Request applying a new config (role/network change).
+ * Safe from UDP callback: reinit is deferred to main loop. */
 void device_request_reinit(const struct device_config *new_cfg);
 
-/* Запросить сохранение текущего конфига во флэш QSPI (переживает перезагрузку).
- * Безопасно из UDP-колбэка: запись отложена до main loop (блокирует ~1 с). */
+/* Request saving current config to QSPI flash (survives reboot).
+ * Safe from UDP callback: write deferred to main loop (blocks ~1 s). */
 void device_request_save(void);
 
-/* Запросить сброс конфига во флэш к заводским (стереть обе копии). */
+/* Request resetting flash config to factory (erase both copies). */
 void device_request_erase(void);
 
 #endif /* DEVICE_CONFIG_H_ */
