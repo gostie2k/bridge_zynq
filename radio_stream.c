@@ -36,7 +36,7 @@ extern struct netif port3_bridge;
  * rx_ring shares this size but never holds more than one block: radio_input_block
  * drains it completely in the same call.
  */
-#define RING_SIZE (16 * 1024)
+#define RING_SIZE (188 * 1024)
 
 extern XLlFifo fifo;
 
