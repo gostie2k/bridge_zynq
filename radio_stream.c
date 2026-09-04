@@ -6,6 +6,7 @@
 #include <stdbool.h>
 #include "modem.h"
 #include "watchdog.h"   /* wdt_progress_kick - WDT robustness under load */
+#include "xtime_l.h"    /* XTime - ms timestamp for queue telemetry */
 
 extern struct netif port3_bridge;
 
@@ -58,6 +59,10 @@ static u32 dbg_err_pkt_gap = 0;   // packet ID gaps on RX
 static int crc_dump_done = 0;     // flag for one-shot CRC-error dump
 static u32 dbg_err_tx_stall = 0;  // tx_process aborted (TX FIFO full)
 static u32 dbg_err_tx_reject = 0; // packet dropped (tx_ring full)
+
+/* Queue telemetry: peak ring occupancy and the TX FIFO depth learned at init. */
+static u32 dbg_tx_count_max = 0;
+static u32 g_fifo_tx_depth  = 0;
 
 // RX parser
 typedef enum {
@@ -328,6 +333,9 @@ static void tx_push_block(const uint8_t *src, uint32_t len) {
 
         chunk = len;
     }
+
+    /* High-water mark: a 10 Hz poll would miss the peaks between samples. */
+    if (tx_count > dbg_tx_count_max) dbg_tx_count_max = tx_count;
 }
 
 void tx_process() {
@@ -638,6 +646,7 @@ void radio_stream_reset_stats(void) {
     tx_head = tx_tail = tx_count = 0;
     rx_head = rx_tail = rx_count = 0;
     crc_dump_done = 0;
+    dbg_tx_count_max = 0;
     xil_printf("[RADIO] Stats + state RESET\r\n");
 }
 
@@ -654,6 +663,43 @@ void radio_stream_get_stats(radio_stats_t *out) {
     out->err_crc        = dbg_err_crc;
 }
 
+
+/* ---- Queue / FIFO telemetry ---- */
+
+static uint32_t now_ms(void) {
+    XTime t;
+    XTime_GetTime(&t);
+    return (uint32_t)((t * 1000ULL) / COUNTS_PER_SECOND);
+}
+
+void radio_stream_set_fifo_depth(uint32_t words) {
+    g_fifo_tx_depth = words;
+}
+
+void radio_stream_get_queue_stats(radio_queue_stats_t *out) {
+    if (!out) return;
+    out->t_ms            = now_ms();
+    out->ring_size       = RING_SIZE;
+    out->tx_count        = tx_count;
+    out->tx_count_max    = dbg_tx_count_max;
+    out->tx_blocks       = dbg_tx_blocks;
+    out->tx_pkts         = dbg_tx_pkts;
+    out->err_tx_reject   = dbg_err_tx_reject;
+    out->err_tx_stall    = dbg_err_tx_stall;
+    out->err_fifo_full   = dbg_err_fifo_full;
+    out->fifo_tx_vacancy = XLlFifo_iTxVacancy(&fifo);
+    out->fifo_tx_depth   = g_fifo_tx_depth;
+    out->rx_count        = rx_count;
+}
+
+void radio_stream_reset_queue_stats(void) {
+    dbg_tx_count_max  = 0;
+    dbg_tx_pkts       = 0;
+    dbg_tx_blocks     = 0;
+    dbg_err_tx_reject = 0;
+    dbg_err_tx_stall  = 0;
+    dbg_err_fifo_full = 0;
+}
 
 void radio_stream_reset_rx_ids(void) {
     rx_first_block_seen = 0;

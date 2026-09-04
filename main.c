@@ -3701,6 +3701,17 @@ int init_tx_rx_fifo() {
     }
     XLlFifo_IntClear(&fifo, 0xFFFFFFFF);
     XLlFifo_Reset(&fifo);
+
+    /* Right after reset the TX vacancy equals the full FIFO depth. It is a
+     * build-time IP parameter and is not exported to xparameters.h, so this
+     * is the only way to learn it from software. One block costs
+     * (188+28)/4 = 54 words. */
+    {
+        u32 depth = XLlFifo_iTxVacancy(&fifo);
+        radio_stream_set_fifo_depth(depth);
+        xil_printf("[FIFO] TX depth = %u words (%u bytes, %u blocks)\r\n",
+                   (unsigned)depth, (unsigned)depth * 4, (unsigned)depth / 54);
+    }
     return XST_SUCCESS;
 }
 

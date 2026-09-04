@@ -540,6 +540,49 @@ static void handle_proto_0x90(struct udp_pcb *upcb, uint8_t *data,
             break;
         }
 
+        case 0x23: { /* Queue telemetry: ring occupancy + air rate + FIFO depth.
+                      * Read-only snapshot used to compare buffering between
+                      * builds; ring_size identifies which build answered. */
+#define QSTAT_LEN 50
+            struct pbuf *pb = resp_alloc(0x23, QSTAT_LEN);
+            if (!pb) break;
+            uint8_t *d = (uint8_t *)pb->payload;
+
+            radio_queue_stats_t qs;
+            radio_stream_get_queue_stats(&qs);
+            int o = 2;
+#define S_PUT(val)              \
+    do {                        \
+        put_le32(d + o, (val)); \
+        o += 4;                 \
+    } while (0)
+            S_PUT(qs.t_ms);
+            S_PUT(qs.ring_size);
+            S_PUT(qs.tx_count);
+            S_PUT(qs.tx_count_max);
+            S_PUT(qs.tx_blocks);
+            S_PUT(qs.tx_pkts);
+            S_PUT(qs.err_tx_reject);
+            S_PUT(qs.err_tx_stall);
+            S_PUT(qs.err_fifo_full);
+            S_PUT(qs.fifo_tx_vacancy);
+            S_PUT(qs.fifo_tx_depth);
+            S_PUT(qs.rx_count);
+#undef S_PUT
+#undef QSTAT_LEN
+            resp_send(upcb, pb, addr, port);
+            break;
+        }
+
+        case 0x24: { /* Reset the queue counters and the peak before a run. */
+            radio_stream_reset_queue_stats();
+            struct pbuf *pb = resp_alloc(0x24, 2);
+            if (!pb) break;
+            resp_send(upcb, pb, addr, port);
+            LOG2("[CMD] Queue stats reset\r\n");
+            break;
+        }
+
             /* ==================== FIFO diagnostics ==================== */
 
         case 0x30: { /* FIFO write -- test 188-byte block */
