@@ -17,9 +17,26 @@ extern struct netif port3_bridge;
 #define MAGIC_H 0xFA
 #define MAGIC_L 0xCE
 
-//#define RING_SIZE (PL_BLOCK_SIZE * 512)
-
-#define RING_SIZE (PL_BLOCK_SIZE * 1024)
+/* Ring sizing. The depth of a queue IS a latency: depth / drain rate.
+ *
+ * Measured on hardware 2026-09-04 with the link saturated (see docs):
+ *   drain rate        308 950 B/s   (2.47 Mbit/s of payload)
+ *   old 192 512 B  -> 623 ms of standing queue, and it sat 99% full
+ *   PL TX FIFO 32 752 B -> another 92 ms that cannot be removed from here
+ *   measured ping under load: 713 ms (4.6 ms idle)
+ *
+ * A big ring does not buy throughput - the air carries what it carries. It only
+ * buys burst tolerance, and past that it just delivers stale data: a frame 600 ms
+ * late is dropped by the decoder anyway, so it is better dropped early.
+ *
+ * Sized for ~50 ms of buffering. Going lower buys little (the FIFO's 92 ms then
+ * dominates) and costs burst tolerance. 16 KB holds ~10 full-size frames.
+ * If the air rate changes, re-derive: bytes = rate_Bps * 0.05.
+ *
+ * rx_ring shares this size but never holds more than one block: radio_input_block
+ * drains it completely in the same call.
+ */
+#define RING_SIZE (16 * 1024)
 
 extern XLlFifo fifo;
 
