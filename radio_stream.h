@@ -11,7 +11,6 @@ void radio_stream_init(void);
 err_t radio_linkoutput(struct netif *netif, struct pbuf *p);
 void radio_input_block(uint8_t *block_188, struct netif *inp_netif);
 void radio_tx_periodic_flush(void);
-static void tx_push_block(const uint8_t *src, uint32_t len);
 
 void tx_process();
 
@@ -63,6 +62,13 @@ typedef struct {
     uint32_t fifo_tx_vacancy; /* free words in TX FIFO now                     */
     uint32_t fifo_tx_depth;   /* TX FIFO depth in words (captured after reset) */
     uint32_t rx_count;        /* bytes queued in rx_ring right now             */
+    /* Telemetry stream, appended so the fields above keep their meaning and
+     * baselines taken before prioritisation stay comparable. */
+    uint32_t tlm_ring_size;
+    uint32_t tlm_count;
+    uint32_t tlm_count_max;
+    uint32_t tlm_pkts;
+    uint32_t tlm_reject;
 } radio_queue_stats_t;
 
 void radio_stream_get_queue_stats(radio_queue_stats_t *out);

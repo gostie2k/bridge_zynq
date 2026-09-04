@@ -7,6 +7,8 @@
 #include "modem.h"
 #include "watchdog.h"   /* wdt_progress_kick - WDT robustness under load */
 #include "xtime_l.h"    /* XTime - ms timestamp for queue telemetry */
+#include "lwip/prot/ethernet.h"
+#include "lwip/prot/ip4.h"
 
 extern struct netif port3_bridge;
 
@@ -38,16 +40,82 @@ extern struct netif port3_bridge;
  */
 #define RING_SIZE (188 * 1024)
 
+/* ================= Traffic classes =================
+ * Two independent streams share the radio: bulk DATA (video) and latency
+ * critical TELEMETRY. They get separate rings, so telemetry never queues
+ * behind a video backlog, and a strict-priority arbiter decides which stream
+ * feeds the PL next.
+ *
+ * Classification is by destination UDP port, plus ARP and ICMP: those are tiny
+ * and the link looks dead when they arrive late, so they ride the fast lane.
+ * Ports are compile-time on purpose - the operator sets them once per install.
+ *
+ * NOTE: with a single PL FIFO the arbiter's decision is partly undone inside
+ * the FIFO (it is always full, ~92 ms measured). Telemetry latency therefore
+ * bottoms out at that FIFO depth until the second/third PL FIFO arrives; the
+ * rings, framers and parsers built here carry over unchanged.
+ */
+#define TLM_UDP_PORTS  { 5005, 5006 }   /* TODO: подставить реальные порты */
+
+#define STREAM_DATA 0
+#define STREAM_TLM  1
+#define STREAM_CNT  2
+
+/* Telemetry ring is small on purpose: its depth IS the telemetry latency, and
+ * under strict priority it should stay nearly empty. 8 KB holds ~5 full frames. */
+#define TLM_RING_SIZE (8 * 1024)
+
 extern XLlFifo fifo;
 
-static uint8_t tx_ring[RING_SIZE];
-static uint32_t tx_head = 0, tx_tail = 0, tx_count = 0;
+typedef struct {
+    uint8_t  *ring;
+    uint32_t  size;
+    uint32_t  head, tail, count;
+    uint16_t  pkt_id;        /* per-stream packet counter (framing) */
+    uint8_t   seq;           /* per-stream block counter, 7 bits on air */
+    uint32_t  dbg_pkts;      /* packets accepted into this ring */
+    uint32_t  dbg_reject;    /* packets dropped: ring full */
+    uint32_t  dbg_count_max; /* high-water mark */
+} tx_stream_t;
 
-static uint8_t rx_ring[RING_SIZE];
-static uint32_t rx_head = 0, rx_tail = 0, rx_count = 0;
+static uint8_t tx_ring_data[RING_SIZE];
+static uint8_t tx_ring_tlm[TLM_RING_SIZE];
 
-static uint16_t global_tx_pkt_counter = 0;
-static uint8_t  global_tx_seq_counter = 0;
+static tx_stream_t tx_str[STREAM_CNT] = {
+    { .ring = tx_ring_data, .size = RING_SIZE },
+    { .ring = tx_ring_tlm,  .size = TLM_RING_SIZE },
+};
+
+static const uint16_t tlm_ports[] = TLM_UDP_PORTS;
+#define TLM_PORTS_N (sizeof(tlm_ports) / sizeof(tlm_ports[0]))
+
+/* Which stream does this frame belong to? Cheap: header walk, no allocation. */
+static int classify(struct pbuf *p)
+{
+    if (p == NULL || p->len < sizeof(struct eth_hdr)) return STREAM_DATA;
+
+    struct eth_hdr *eth = (struct eth_hdr *)p->payload;
+    uint16_t type = lwip_ntohs(eth->type);
+
+    if (type == ETHTYPE_ARP) return STREAM_TLM;
+    if (type != ETHTYPE_IP)  return STREAM_DATA;
+    if (p->len < sizeof(struct eth_hdr) + 20) return STREAM_DATA;
+
+    uint8_t *ip = (uint8_t *)p->payload + sizeof(struct eth_hdr);
+    uint8_t proto = ip[9];
+    if (proto == 1)  return STREAM_TLM;    /* ICMP */
+    if (proto != 17) return STREAM_DATA;   /* only UDP is classified by port */
+
+    uint32_t ihl = (uint32_t)(ip[0] & 0x0F) * 4;
+    if (ihl < 20 || p->len < sizeof(struct eth_hdr) + ihl + 8) return STREAM_DATA;
+
+    uint8_t *udp = ip + ihl;
+    uint16_t dport = ((uint16_t)udp[2] << 8) | udp[3];
+    for (unsigned i = 0; i < TLM_PORTS_N; i++)
+        if (dport == tlm_ports[i]) return STREAM_TLM;
+
+    return STREAM_DATA;
+}
 
 static int  loopback_enabled = 0;  // 0 = real FPGA, 1 = software loopback
 
@@ -63,7 +131,6 @@ uint16_t cnt_tx_seg=0;
 
 
 
-static u32 dbg_tx_pkts = 0;
 static u32 dbg_tx_blocks = 0;
 static u32 dbg_rx_blocks = 0;
 static u32 dbg_rx_pkts = 0;
@@ -75,10 +142,8 @@ static u32 dbg_err_pkt_gap = 0;   // packet ID gaps on RX
 
 static int crc_dump_done = 0;     // flag for one-shot CRC-error dump
 static u32 dbg_err_tx_stall = 0;  // tx_process aborted (TX FIFO full)
-static u32 dbg_err_tx_reject = 0; // packet dropped (tx_ring full)
 
-/* Queue telemetry: peak ring occupancy and the TX FIFO depth learned at init. */
-static u32 dbg_tx_count_max = 0;
+/* TX FIFO depth, learned once at init (build-time IP parameter). */
 static u32 g_fifo_tx_depth  = 0;
 
 // RX parser
@@ -90,18 +155,33 @@ typedef enum {
     ST_CRC0, ST_CRC1, ST_CRC2, ST_CRC3
 } rx_state_t;
 
-static rx_state_t rx_state = ST_MAGIC_H;
-static uint16_t rx_pkt_len = 0;
-static uint16_t rx_pkt_received = 0;
-static uint8_t  rx_pkt_buffer[1600];
-static uint32_t rx_calc_crc = 0;
-static uint32_t rx_recv_crc = 0;
-static uint8_t  rx_last_seq = 0;      // for segment continuity check
-static uint16_t rx_last_src_id = 0;   // source device_id from block header (point-to-multipoint)
-static int      rx_first_block_seen = 0;
-static uint16_t rx_last_pkt_id = 0;  // for packet continuity check
-static int      rx_first_pkt_seen = 0;
-static uint16_t rx_curr_pkt_id = 0;
+/* One reassembly context per stream. The two streams are interleaved on air
+ * block by block, so each needs its own ring, parser state and counters -
+ * feeding both into one parser would splice video into telemetry. */
+typedef struct {
+    uint8_t   *ring;
+    uint32_t   size, head, tail, count;
+    rx_state_t state;
+    uint16_t   pkt_len, pkt_received;
+    uint8_t    pkt_buffer[1600];
+    uint32_t   calc_crc, recv_crc;
+    uint8_t    last_seq;         /* 7-bit block counter of this stream */
+    int        first_block_seen;
+    uint16_t   last_pkt_id, curr_pkt_id;
+    int        first_pkt_seen;
+} rx_stream_t;
+
+/* RX rings never hold more than one block: radio_input_block drains what it
+ * just wrote in the same call. Sized generously anyway, it costs little. */
+static uint8_t rx_ring_data[RING_SIZE];
+static uint8_t rx_ring_tlm[TLM_RING_SIZE];
+
+static rx_stream_t rx_str[STREAM_CNT] = {
+    { .ring = rx_ring_data, .size = RING_SIZE,     .state = ST_MAGIC_H },
+    { .ring = rx_ring_tlm,  .size = TLM_RING_SIZE, .state = ST_MAGIC_H },
+};
+
+static uint16_t rx_last_src_id = 0;   /* source device_id from block header */
 
 
 
@@ -327,24 +407,17 @@ static void send_block_to_pl(uint8_t *block) {
 // TX PART (SEND)
 // =========================================================
 
-//static void tx_push(uint8_t b) {
-//    tx_ring[tx_head] = b;
-//    tx_head = (tx_head + 1) % RING_SIZE;
-//    tx_count++;
-//}
+/* Block write into a stream's ring (handles wrap-around). */
+static void tx_push_block(tx_stream_t *s, const uint8_t *src, uint32_t len) {
 
-
-// Block write into tx_ring (instead of byte-wise tx_push)
-static void tx_push_block(const uint8_t *src, uint32_t len) {
-
-	uint32_t space_to_end = RING_SIZE - tx_head;
+    uint32_t space_to_end = s->size - s->head;
     uint32_t chunk = (space_to_end < len) ? space_to_end : len;
 
     while (len > 0) {
 
-        memcpy(&tx_ring[tx_head], src, chunk);
-        tx_head = (tx_head + chunk) % RING_SIZE;
-        tx_count += chunk;
+        memcpy(&s->ring[s->head], src, chunk);
+        s->head = (s->head + chunk) % s->size;
+        s->count += chunk;
         src += chunk;
         len -= chunk;
 
@@ -352,40 +425,66 @@ static void tx_push_block(const uint8_t *src, uint32_t len) {
     }
 
     /* High-water mark: a 10 Hz poll would miss the peaks between samples. */
-    if (tx_count > dbg_tx_count_max) dbg_tx_count_max = tx_count;
+    if (s->count > s->dbg_count_max) s->dbg_count_max = s->count;
 }
 
+/* Cut one block off a stream and hand it to the PL. */
+static void tx_emit_block(tx_stream_t *s, int stream_id) {
+    uint8_t block[PL_BLOCK_SIZE];
+
+    /* [0] = stream bit (7) + 7-bit block counter of THIS stream. The receiver
+     * demuxes on that bit; the counter still detects lost blocks per stream. */
+    block[0] = (uint8_t)((stream_id << 7) | (s->seq & 0x7F));
+    s->seq = (uint8_t)((s->seq + 1) & 0x7F);
+
+    /* device_id (2 bytes) into EVERY block header - for point-to-multipoint:
+     * receiver tells which modem the segment came from. */
+    block[1] = (current_config.device_id >> 8) & 0xFF;
+    block[2] =  current_config.device_id       & 0xFF;
+
+    uint32_t space_to_end = s->size - s->tail;
+    if (space_to_end >= BLOCK_PAYLOAD_SIZE) {
+        memcpy(&block[BLOCK_HEADER_SIZE], &s->ring[s->tail], BLOCK_PAYLOAD_SIZE);
+        s->tail = (s->tail + BLOCK_PAYLOAD_SIZE) % s->size;
+    } else {
+        memcpy(&block[BLOCK_HEADER_SIZE], &s->ring[s->tail], space_to_end);
+        memcpy(&block[BLOCK_HEADER_SIZE + space_to_end], &s->ring[0],
+               BLOCK_PAYLOAD_SIZE - space_to_end);
+        s->tail = BLOCK_PAYLOAD_SIZE - space_to_end;
+    }
+    s->count -= BLOCK_PAYLOAD_SIZE;
+
+    send_block_to_pl(block);
+}
+
+/* Arbiter: strict priority, telemetry first.
+ *
+ * A packet spans several blocks, and the two streams interleave block by
+ * block - that is exactly why the stream bit exists, the receiver reassembles
+ * each stream separately. Within a stream, order is preserved.
+ *
+ * Worst case a telemetry block waits for the data block already handed to the
+ * PL, i.e. one block time - not the length of the video backlog ahead of it. */
 void tx_process() {
-    while (tx_count >= BLOCK_PAYLOAD_SIZE) {
-        // If TX FIFO full - exit, radio_poll will resend
-        //if (XLlFifo_iTxVacancy(&fifo) < (PL_BLOCK_SIZE / 4)) {
-        if (XLlFifo_iTxVacancy(&fifo) < ((PL_BLOCK_SIZE+28) / 4) ) {
+    while (1) {
+        tx_stream_t *s;
+        int stream_id;
 
+        if (tx_str[STREAM_TLM].count >= BLOCK_PAYLOAD_SIZE) {
+            s = &tx_str[STREAM_TLM];  stream_id = STREAM_TLM;
+        } else if (tx_str[STREAM_DATA].count >= BLOCK_PAYLOAD_SIZE) {
+            s = &tx_str[STREAM_DATA]; stream_id = STREAM_DATA;
+        } else {
+            break;                    /* neither stream has a full block */
+        }
 
+        /* If TX FIFO full - exit, radio_poll will resend */
+        if (XLlFifo_iTxVacancy(&fifo) < ((PL_BLOCK_SIZE + 28) / 4)) {
             dbg_err_tx_stall++;
             break;
         }
 
-        uint8_t block[PL_BLOCK_SIZE];
-        block[0] = global_tx_seq_counter++;
-        /* device_id (2 bytes) into EVERY block header - for point-to-multipoint:
-         * receiver tells which modem the segment came from. */
-        block[1] = (current_config.device_id >> 8) & 0xFF;
-        block[2] =  current_config.device_id       & 0xFF;
-
-        // Block copy from ring (handling wrap-around)
-        uint32_t space_to_end = RING_SIZE - tx_tail;
-        if (space_to_end >= BLOCK_PAYLOAD_SIZE) {
-            memcpy(&block[BLOCK_HEADER_SIZE], &tx_ring[tx_tail], BLOCK_PAYLOAD_SIZE);
-            tx_tail = (tx_tail + BLOCK_PAYLOAD_SIZE) % RING_SIZE;
-        } else {
-            memcpy(&block[BLOCK_HEADER_SIZE], &tx_ring[tx_tail], space_to_end);
-            memcpy(&block[BLOCK_HEADER_SIZE + space_to_end], &tx_ring[0], BLOCK_PAYLOAD_SIZE - space_to_end);
-            tx_tail = BLOCK_PAYLOAD_SIZE - space_to_end;
-        }
-        tx_count -= BLOCK_PAYLOAD_SIZE;
-
-        send_block_to_pl(block);
+        tx_emit_block(s, stream_id);
     }
 }
 
@@ -398,12 +497,15 @@ err_t radio_linkoutput(struct netif *netif, struct pbuf *p) {
     wdt_section_mark(WDT_SEC_RADIO_TX);
     wdt_progress_kick();
 
-    if ((RING_SIZE - tx_count) < (p->tot_len + 10)) {
-        dbg_err_tx_reject++;
+    int stream_id = classify(p);
+    tx_stream_t *s = &tx_str[stream_id];
+
+    if ((s->size - s->count) < (uint32_t)(p->tot_len + 10)) {
+        s->dbg_reject++;
         return ERR_MEM;
     }
 
-    dbg_tx_pkts++;
+    s->dbg_pkts++;
 
     // CRC32 over whole packet (block - one table lookup per byte)
     uint32_t crc = 0xFFFFFFFF;
@@ -417,16 +519,16 @@ err_t radio_linkoutput(struct netif *netif, struct pbuf *p) {
     uint8_t hdr[6];
     hdr[0] = MAGIC_H;
     hdr[1] = MAGIC_L;
-    hdr[2] = (global_tx_pkt_counter >> 8) & 0xFF;
-    hdr[3] = global_tx_pkt_counter & 0xFF;
+    hdr[2] = (s->pkt_id >> 8) & 0xFF;
+    hdr[3] = s->pkt_id & 0xFF;
     hdr[4] = (p->tot_len >> 8) & 0xFF;
     hdr[5] = (p->tot_len & 0xFF);
-    global_tx_pkt_counter++;
-    tx_push_block(hdr, 6);
+    s->pkt_id++;
+    tx_push_block(s, hdr, 6);
 
     // Packet data - block write (memcpy instead of byte-wise)
     for(q = p; q != NULL; q = q->next) {
-        tx_push_block((uint8_t*)q->payload, q->len);
+        tx_push_block(s, (uint8_t*)q->payload, q->len);
     }
 
     // CRC (4 bytes)
@@ -435,7 +537,7 @@ err_t radio_linkoutput(struct netif *netif, struct pbuf *p) {
     crc_bytes[1] = (crc >> 16) & 0xFF;
     crc_bytes[2] = (crc >> 8) & 0xFF;
     crc_bytes[3] = crc & 0xFF;
-    tx_push_block(crc_bytes, 4);
+    tx_push_block(s, crc_bytes, 4);
 
     tx_process();
     return ERR_OK;
@@ -443,22 +545,25 @@ err_t radio_linkoutput(struct netif *netif, struct pbuf *p) {
 
 
 void radio_tx_periodic_flush(void) {
-    if (tx_count > 0 && tx_count < BLOCK_PAYLOAD_SIZE) {
-        uint32_t pad_needed = BLOCK_PAYLOAD_SIZE - tx_count;
-        if ((RING_SIZE - tx_count) >= pad_needed) {
-            // Zero-fill in block
-            uint8_t zeros[BLOCK_PAYLOAD_SIZE];
-            memset(zeros, 0x00, pad_needed);
-            tx_push_block(zeros, pad_needed);
-            tx_process();
+    /* A tail shorter than one block would sit in the ring until more traffic
+     * arrives. Pad it out so the packet is not held hostage - matters most for
+     * telemetry, which is bursty and small. */
+    for (int i = 0; i < STREAM_CNT; i++) {
+        tx_stream_t *s = &tx_str[i];
+        if (s->count > 0 && s->count < BLOCK_PAYLOAD_SIZE) {
+            uint32_t pad_needed = BLOCK_PAYLOAD_SIZE - s->count;
+            if ((s->size - s->count) >= pad_needed) {
+                uint8_t zeros[BLOCK_PAYLOAD_SIZE];
+                memset(zeros, 0x00, pad_needed);
+                tx_push_block(s, zeros, pad_needed);
+            }
         }
     }
+    tx_process();
 }
-
-
 void radio_poll(void) {
     drain_rx_fifo();
-    tx_process();  // resends blocks from tx_ring if room in FIFO
+    tx_process();  // resends blocks from the rings if room in FIFO
 }
 
 // =========================================================
@@ -468,134 +573,117 @@ void radio_poll(void) {
 void radio_input_block(uint8_t *block_188, struct netif *inp_netif) {
     dbg_rx_blocks++;
 
-    uint8_t seq = block_188[0];
+    /* [0] = stream bit (7) + 7-bit per-stream block counter. Demux first:
+     * feeding both streams into one parser would splice them together. */
+    int stream_id = (block_188[0] >> 7) & 1;
+    uint8_t seq   = block_188[0] & 0x7F;
+    rx_stream_t *st = &rx_str[stream_id];
+
     /* source device_id (point-to-point for now - just read; in multipoint
      * this will demux by source). */
     rx_last_src_id = ((uint16_t)block_188[1] << 8) | block_188[2];
-    if (!rx_first_block_seen) {
-        rx_first_block_seen = 1;
-    } else if ((uint8_t)(rx_last_seq + 1) != seq) {
+
+    if (!st->first_block_seen) {
+        st->first_block_seen = 1;
+    } else if (((st->last_seq + 1) & 0x7F) != seq) {
         dbg_err_seq_gap++;
     }
-    rx_last_seq = seq;
+    st->last_seq = seq;
 
     for (int i = 0; i < BLOCK_PAYLOAD_SIZE; i++) {
-        if (rx_count < RING_SIZE) {
-            rx_ring[rx_head] = block_188[i + BLOCK_HEADER_SIZE];
-            rx_head = (rx_head + 1) % RING_SIZE;
-            rx_count++;
+        if (st->count < st->size) {
+            st->ring[st->head] = block_188[i + BLOCK_HEADER_SIZE];
+            st->head = (st->head + 1) % st->size;
+            st->count++;
         } else {
             dbg_err_rx_overflow++;
         }
     }
 
-    //printf("rx_count=%d\r\n", rx_count);
+    while (st->count > 0) {
+        uint8_t b = st->ring[st->tail];
 
-
-    while (rx_count > 0) {
-        uint8_t b = rx_ring[rx_tail];
-
-        if (rx_state == ST_DATA) {
-             rx_calc_crc = calc_crc32_byte(rx_calc_crc, b);
+        if (st->state == ST_DATA) {
+             st->calc_crc = calc_crc32_byte(st->calc_crc, b);
         }
 
-        switch (rx_state) {
+        switch (st->state) {
             case ST_MAGIC_H:
-                if (b == MAGIC_H) rx_state = ST_MAGIC_L;
-                rx_tail = (rx_tail + 1) % RING_SIZE; rx_count--;
+                if (b == MAGIC_H) st->state = ST_MAGIC_L;
+                st->tail = (st->tail + 1) % st->size; st->count--;
                 break;
 
             case ST_MAGIC_L:
-                if (b == MAGIC_L) rx_state = ST_ID_H;
-                else rx_state = ST_MAGIC_H;
-                rx_tail = (rx_tail + 1) % RING_SIZE; rx_count--;
+                if (b == MAGIC_L) st->state = ST_ID_H;
+                else st->state = ST_MAGIC_H;
+                st->tail = (st->tail + 1) % st->size; st->count--;
                 break;
 
             case ST_ID_H:
-                rx_curr_pkt_id = ((uint16_t)b << 8);
-                rx_tail = (rx_tail + 1) % RING_SIZE; rx_count--;
-                rx_state = ST_ID_L;
+                st->curr_pkt_id = ((uint16_t)b << 8);
+                st->tail = (st->tail + 1) % st->size; st->count--;
+                st->state = ST_ID_L;
                 break;
 
             case ST_ID_L:
-                rx_curr_pkt_id |= b;
-                if (!rx_first_pkt_seen) {
-                    rx_first_pkt_seen = 1;
-                } else if ((uint16_t)(rx_last_pkt_id + 1) != rx_curr_pkt_id) {
+                st->curr_pkt_id |= b;
+                if (!st->first_pkt_seen) {
+                    st->first_pkt_seen = 1;
+                } else if ((uint16_t)(st->last_pkt_id + 1) != st->curr_pkt_id) {
                     dbg_err_pkt_gap++;
                 }
-                rx_last_pkt_id = rx_curr_pkt_id;
-                rx_tail = (rx_tail + 1) % RING_SIZE; rx_count--;
-                rx_state = ST_LEN_H;
+                st->last_pkt_id = st->curr_pkt_id;
+                st->tail = (st->tail + 1) % st->size; st->count--;
+                st->state = ST_LEN_H;
                 break;
 
             case ST_LEN_H:
-                rx_pkt_len = (b << 8);
-                rx_tail = (rx_tail + 1) % RING_SIZE; rx_count--;
-                rx_state = ST_LEN_L;
+                st->pkt_len = (b << 8);
+                st->tail = (st->tail + 1) % st->size; st->count--;
+                st->state = ST_LEN_L;
                 break;
 
             case ST_LEN_L:
-                rx_pkt_len |= b;
-                rx_tail = (rx_tail + 1) % RING_SIZE; rx_count--;
-                if (rx_pkt_len > 1520 || rx_pkt_len == 0) {
-                    rx_state = ST_MAGIC_H;
+                st->pkt_len |= b;
+                st->tail = (st->tail + 1) % st->size; st->count--;
+                if (st->pkt_len > 1520 || st->pkt_len == 0) {
+                    st->state = ST_MAGIC_H;
                 } else {
-                    rx_pkt_received = 0;
-                    rx_calc_crc = 0xFFFFFFFF; // Init CRC
-                    rx_state = ST_DATA;
+                    st->pkt_received = 0;
+                    st->calc_crc = 0xFFFFFFFF; // Init CRC
+                    st->state = ST_DATA;
                 }
                 break;
 
             case ST_DATA:
-                rx_pkt_buffer[rx_pkt_received++] = b;
-                rx_tail = (rx_tail + 1) % RING_SIZE; rx_count--;
-                if (rx_pkt_received == rx_pkt_len) {
-                    rx_calc_crc = ~rx_calc_crc; // Finalize CRC
-                    rx_state = ST_CRC0;
+                st->pkt_buffer[st->pkt_received++] = b;
+                st->tail = (st->tail + 1) % st->size; st->count--;
+                if (st->pkt_received == st->pkt_len) {
+                    st->calc_crc = ~st->calc_crc; // Finalize CRC
+                    st->state = ST_CRC0;
                 }
                 break;
 
-            case ST_CRC0: rx_recv_crc = ((uint32_t)b << 24); rx_state = ST_CRC1; rx_tail = (rx_tail + 1) % RING_SIZE; rx_count--; break;
-            case ST_CRC1: rx_recv_crc |= ((uint32_t)b << 16); rx_state = ST_CRC2; rx_tail = (rx_tail + 1) % RING_SIZE; rx_count--; break;
-            case ST_CRC2: rx_recv_crc |= ((uint32_t)b << 8);  rx_state = ST_CRC3; rx_tail = (rx_tail + 1) % RING_SIZE; rx_count--; break;
-            case ST_CRC3: rx_recv_crc |= b;
-                rx_tail = (rx_tail + 1) % RING_SIZE; rx_count--;
-
-
-              // printf("rx_recv_crc = %08X rx_calc_crc= %08X\r\n",rx_recv_crc, rx_calc_crc);
-
+            case ST_CRC0: st->recv_crc = ((uint32_t)b << 24); st->state = ST_CRC1; st->tail = (st->tail + 1) % st->size; st->count--; break;
+            case ST_CRC1: st->recv_crc |= ((uint32_t)b << 16); st->state = ST_CRC2; st->tail = (st->tail + 1) % st->size; st->count--; break;
+            case ST_CRC2: st->recv_crc |= ((uint32_t)b << 8);  st->state = ST_CRC3; st->tail = (st->tail + 1) % st->size; st->count--; break;
+            case ST_CRC3: st->recv_crc |= b;
+                st->tail = (st->tail + 1) % st->size; st->count--;
 
                 // CRC CHECK
-                if (rx_recv_crc == rx_calc_crc) {
+                if (st->recv_crc == st->calc_crc) {
                     dbg_rx_pkts++;
 
-                    //struct pbuf *p = pbuf_alloc(PBUF_RAW, rx_pkt_len, PBUF_RAM);
-                    struct pbuf *p = pbuf_alloc(PBUF_TRANSPORT, rx_pkt_len, PBUF_RAM);
+                    struct pbuf *p = pbuf_alloc(PBUF_TRANSPORT, st->pkt_len, PBUF_RAM);
 
                     if (p != NULL) {
+                        memcpy(p->payload, st->pkt_buffer, st->pkt_len);
 
-                        memcpy(p->payload, rx_pkt_buffer, rx_pkt_len);
-
-                       // printf("SP l=%d\r\n",rx_pkt_len);
-
-
-                    	if (0)
-                    	{
-                           struct eth_hdr *ethhdr = (struct eth_hdr*)p->payload;
-                            xil_printf("[seg2pbuf]   ethernet_input: dest:%02X:%02X:%02X:%02X:%02X:%02X, src:%02X:%02X:%02X:%02X:%02X:%02X, type:%04X  len: %4d  \n\r",
-                           (unsigned char)ethhdr->dest.addr[0], (unsigned char)ethhdr->dest.addr[1], (unsigned char)ethhdr->dest.addr[2],
-                           (unsigned char)ethhdr->dest.addr[3], (unsigned char)ethhdr->dest.addr[4], (unsigned char)ethhdr->dest.addr[5],
-                           (unsigned char)ethhdr->src.addr[0],  (unsigned char)ethhdr->src.addr[1],  (unsigned char)ethhdr->src.addr[2],
-                           (unsigned char)ethhdr->src.addr[3],  (unsigned char)ethhdr->src.addr[4],  (unsigned char)ethhdr->src.addr[5],
-                    	   lwip_htons(ethhdr->type) , p->tot_len  );
-                    	}
-
-
-
+                        /* Both streams are ordinary Ethernet frames: the bridge
+                         * on this side delivers them by MAC, so telemetry needs
+                         * no special handling here. */
                         if (inp_netif->input != NULL) {
                             if (inp_netif->input(p, inp_netif) != ERR_OK) {
-
                             	printf("NOT input\r\n");
                             	pbuf_free(p);
                             }
@@ -605,24 +693,16 @@ void radio_input_block(uint8_t *block_188, struct netif *inp_netif) {
                         }
                     }
 
-
                 } else {
                     dbg_err_crc++;
                     if (!crc_dump_done) {
                         crc_dump_done = 1;
-                        xil_printf("[CRC FAIL] pkt_id=%u len=%u calc=0x%08X recv=0x%08X\r\n",
-                                   rx_curr_pkt_id, rx_pkt_len, rx_calc_crc, rx_recv_crc);
-                        xil_printf("First 48 bytes: ");
-                        for (int d = 0; d < 48 && d < rx_pkt_len; d++)
-                            xil_printf("%02X ", rx_pkt_buffer[d]);
-                        xil_printf("\r\n");
-                        xil_printf("Last 16 bytes: ");
-                        for (int d = (rx_pkt_len > 16 ? rx_pkt_len - 16 : 0); d < rx_pkt_len; d++)
-                            xil_printf("%02X ", rx_pkt_buffer[d]);
-                        xil_printf("\r\n");
+                        xil_printf("[CRC FAIL] stream=%d pkt_id=%u len=%u calc=0x%08X recv=0x%08X\r\n",
+                                   stream_id, st->curr_pkt_id, st->pkt_len,
+                                   st->calc_crc, st->recv_crc);
                     }
                 }
-                rx_state = ST_MAGIC_H;
+                st->state = ST_MAGIC_H;
                 break;
         }
     }
@@ -630,21 +710,27 @@ void radio_input_block(uint8_t *block_188, struct netif *inp_netif) {
 
 // Print statistics
 void radio_stream_print_stats(void) {
-    xil_printf("TX: %u Pkt -> %u Blk (FIFO full: %u, stall: %u, reject: %u)\r\n",
-        dbg_tx_pkts, dbg_tx_blocks, dbg_err_fifo_full, dbg_err_tx_stall, dbg_err_tx_reject);
+    xil_printf("TX data: %u Pkt (reject %u)   TX tlm: %u Pkt (reject %u)\r\n",
+        tx_str[STREAM_DATA].dbg_pkts, tx_str[STREAM_DATA].dbg_reject,
+        tx_str[STREAM_TLM].dbg_pkts,  tx_str[STREAM_TLM].dbg_reject);
+    xil_printf("TX: %u Blk (FIFO full: %u, stall: %u)\r\n",
+        dbg_tx_blocks, dbg_err_fifo_full, dbg_err_tx_stall);
     xil_printf("RX: %u Blk (seg gap: %u, overflow: %u) -> %u Pkt (pkt gap: %u, CRC err: %u)  src_id=%u\r\n",
         dbg_rx_blocks, dbg_err_seq_gap, dbg_err_rx_overflow,
         dbg_rx_pkts, dbg_err_pkt_gap, dbg_err_crc, rx_last_src_id);
-    xil_printf("RING: tx_count=%u/%u\r\n", tx_count, RING_SIZE);
+    xil_printf("RING: data=%u/%u  tlm=%u/%u\r\n",
+        tx_str[STREAM_DATA].count, tx_str[STREAM_DATA].size,
+        tx_str[STREAM_TLM].count,  tx_str[STREAM_TLM].size);
 }
 
 void radio_stream_init(void) {
-    tx_head = tx_tail = tx_count = 0;
-    rx_head = rx_tail = rx_count = 0;
+    for (int i = 0; i < STREAM_CNT; i++) {
+        tx_str[i].head = tx_str[i].tail = tx_str[i].count = 0;
+        rx_str[i].head = rx_str[i].tail = rx_str[i].count = 0;
+    }
 }
 
 void radio_stream_reset_stats(void) {
-    dbg_tx_pkts = 0;
     dbg_tx_blocks = 0;
     dbg_rx_blocks = 0;
     dbg_rx_pkts = 0;
@@ -654,22 +740,21 @@ void radio_stream_reset_stats(void) {
     dbg_err_rx_overflow = 0;
     dbg_err_pkt_gap = 0;
     dbg_err_tx_stall = 0;
-    dbg_err_tx_reject = 0;
-    global_tx_pkt_counter = 0;
-    global_tx_seq_counter = 0;
-    rx_first_block_seen = 0;
-    rx_first_pkt_seen = 0;
-    rx_state = ST_MAGIC_H;
-    tx_head = tx_tail = tx_count = 0;
-    rx_head = rx_tail = rx_count = 0;
+    for (int i = 0; i < STREAM_CNT; i++) {
+        tx_str[i].head = tx_str[i].tail = tx_str[i].count = 0;
+        tx_str[i].pkt_id = 0; tx_str[i].seq = 0;
+        tx_str[i].dbg_pkts = tx_str[i].dbg_reject = tx_str[i].dbg_count_max = 0;
+        rx_str[i].head = rx_str[i].tail = rx_str[i].count = 0;
+        rx_str[i].state = ST_MAGIC_H;
+        rx_str[i].first_block_seen = rx_str[i].first_pkt_seen = 0;
+    }
     crc_dump_done = 0;
-    dbg_tx_count_max = 0;
     xil_printf("[RADIO] Stats + state RESET\r\n");
 }
 
 void radio_stream_get_stats(radio_stats_t *out) {
     if (!out) return;
-    out->tx_pkts        = dbg_tx_pkts;
+    out->tx_pkts        = tx_str[STREAM_DATA].dbg_pkts + tx_str[STREAM_TLM].dbg_pkts;
     out->tx_blocks      = dbg_tx_blocks;
     out->err_fifo_full  = dbg_err_fifo_full;
     out->rx_blocks      = dbg_rx_blocks;
@@ -696,31 +781,43 @@ void radio_stream_set_fifo_depth(uint32_t words) {
 void radio_stream_get_queue_stats(radio_queue_stats_t *out) {
     if (!out) return;
     out->t_ms            = now_ms();
-    out->ring_size       = RING_SIZE;
-    out->tx_count        = tx_count;
-    out->tx_count_max    = dbg_tx_count_max;
+    /* Fields 2..12 describe the DATA stream, so baselines taken before
+     * prioritisation stay comparable. Telemetry is appended after them. */
+    out->ring_size       = tx_str[STREAM_DATA].size;
+    out->tx_count        = tx_str[STREAM_DATA].count;
+    out->tx_count_max    = tx_str[STREAM_DATA].dbg_count_max;
     out->tx_blocks       = dbg_tx_blocks;
-    out->tx_pkts         = dbg_tx_pkts;
-    out->err_tx_reject   = dbg_err_tx_reject;
+    out->tx_pkts         = tx_str[STREAM_DATA].dbg_pkts;
+    out->err_tx_reject   = tx_str[STREAM_DATA].dbg_reject;
     out->err_tx_stall    = dbg_err_tx_stall;
     out->err_fifo_full   = dbg_err_fifo_full;
     out->fifo_tx_vacancy = XLlFifo_iTxVacancy(&fifo);
     out->fifo_tx_depth   = g_fifo_tx_depth;
-    out->rx_count        = rx_count;
+    out->rx_count        = rx_str[STREAM_DATA].count;
+
+    out->tlm_ring_size   = tx_str[STREAM_TLM].size;
+    out->tlm_count       = tx_str[STREAM_TLM].count;
+    out->tlm_count_max   = tx_str[STREAM_TLM].dbg_count_max;
+    out->tlm_pkts        = tx_str[STREAM_TLM].dbg_pkts;
+    out->tlm_reject      = tx_str[STREAM_TLM].dbg_reject;
 }
 
 void radio_stream_reset_queue_stats(void) {
-    dbg_tx_count_max  = 0;
-    dbg_tx_pkts       = 0;
     dbg_tx_blocks     = 0;
-    dbg_err_tx_reject = 0;
     dbg_err_tx_stall  = 0;
     dbg_err_fifo_full = 0;
+    for (int i = 0; i < STREAM_CNT; i++) {
+        tx_str[i].dbg_count_max = 0;
+        tx_str[i].dbg_pkts      = 0;
+        tx_str[i].dbg_reject    = 0;
+    }
 }
 
 void radio_stream_reset_rx_ids(void) {
-    rx_first_block_seen = 0;
-    rx_first_pkt_seen   = 0;
+    for (int i = 0; i < STREAM_CNT; i++) {
+        rx_str[i].first_block_seen = 0;
+        rx_str[i].first_pkt_seen   = 0;
+    }
 }
 
 void radio_stream_set_loopback(int enable) {    loopback_enabled = enable;

@@ -543,7 +543,7 @@ static void handle_proto_0x90(struct udp_pcb *upcb, uint8_t *data,
         case 0x23: { /* Queue telemetry: ring occupancy + air rate + FIFO depth.
                       * Read-only snapshot used to compare buffering between
                       * builds; ring_size identifies which build answered. */
-#define QSTAT_LEN 50
+#define QSTAT_LEN 70
             struct pbuf *pb = resp_alloc(0x23, QSTAT_LEN);
             if (!pb) break;
             uint8_t *d = (uint8_t *)pb->payload;
@@ -568,6 +568,11 @@ static void handle_proto_0x90(struct udp_pcb *upcb, uint8_t *data,
             S_PUT(qs.fifo_tx_vacancy);
             S_PUT(qs.fifo_tx_depth);
             S_PUT(qs.rx_count);
+            S_PUT(qs.tlm_ring_size);
+            S_PUT(qs.tlm_count);
+            S_PUT(qs.tlm_count_max);
+            S_PUT(qs.tlm_pkts);
+            S_PUT(qs.tlm_reject);
 #undef S_PUT
 #undef QSTAT_LEN
             resp_send(upcb, pb, addr, port);
