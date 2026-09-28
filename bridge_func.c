@@ -1,6 +1,10 @@
 #include "bridge_func.h"
 #include "lwip/pbuf.h"
 #include "cmd_buf.h"
+#include "firewall.h"
+
+/* Firewall on the bridge->radio path. Set to 0 to disable (easy rollback). */
+#define FW_ENABLE 1
 //extern struct netif udp_netif2;
 extern struct netif port1_bridge;
 //extern struct netif port2_bridge;
@@ -168,6 +172,12 @@ err_t vport3_linkoutput(struct netif *netif, struct pbuf *p) {
 
 	if (tx_chan0.creg0.inside.pkt_len == 576)
 	{
+#if FW_ENABLE
+	   /* Firewall: drop frames that don't pass the filter before the radio. */
+	   if (!firewall_filter(p, &bridge_netif)) {
+	       return ERR_OK;   /* blocked: drop, do not forward to radio */
+	   }
+#endif
 	   deb_cnt_rf++;
 	   return radio_linkoutput(netif, p);
 	}
