@@ -26,9 +26,9 @@
 
 //#define IS_BORT 1
 
-//#define IS_MASTER 1
+#define IS_MASTER 1
 //#define IS_OLD_PAR 1
-#define IS_SLAVE 1
+//#define IS_SLAVE 1
 
 #define IS_ANTSDR
 //#define IS_MAKET_PKRV
@@ -38,7 +38,7 @@
  * flashing: 1st modem=1, 2nd=2, etc. Used for addressed broadcast commands
  * (0xA0 group=5) and embedded in every 188-byte radio segment. */
 #ifndef DEVICE_ID_DEFAULT
-#define DEVICE_ID_DEFAULT  2
+#define DEVICE_ID_DEFAULT  11
 #endif
 
 #define RX_CORE_BASEADDR XPAR_PPOS_DSP_0_S01_AXI_BASEADDR
@@ -61,7 +61,7 @@
 /* ===================================================================
  *  Firmware version / role + WDT default (WDT-stability merge)
  * =================================================================== */
-#define FW_VERSION   "wdt-robust-r11"
+#define FW_VERSION   "PRIOR_TEST_1_FIFO"
 
 #if defined(IS_MASTER) && !defined(IS_SLAVE)
   #define FW_ROLE_STR "MASTER"
