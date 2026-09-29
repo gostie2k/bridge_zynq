@@ -855,7 +855,10 @@ static void handle_creg_exch(struct udp_pcb *upcb, uint8_t *data,
                 u32 word = (u32)data[7] | ((u32)data[6] << 8) |
                            ((u32)data[5] << 16) | ((u32)data[4] << 24);
 
-                ppos.creg2.word = word;
+                /* Здесь было безусловное `ppos.creg2.word = word;` — любая
+                 * запись ЛЮБОГО регистра затирала теневую копию creg2, где
+                 * лежат GPIO, тангента, питание УФ и диапазон частот Fdiap.
+                 * В AXI мусор уходил при следующем ppos_set_tangenta(). */
 
                 if (offset == 2) {
                     ppos.creg2.word = word;

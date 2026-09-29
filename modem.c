@@ -574,9 +574,8 @@ void ppos_set_tangenta(ena_type ena)
 
 
 
-	 /* Слот 6250 мкс: при 14 сегментах слейва это 14*226 = 3164 мкс эфира,
-	  * плюс сегмент мастера — в слот укладывается. На 600 мкс не влезало. */
-	 ppos.creg5.inside.slot_dur = 6250;
+
+	 ppos.creg5.inside.slot_dur = 5000;
 
 	 AXI_CNTRL_REG_WRITE(AXI_CNTRL_REG_BASEADDR, 20, ppos.creg5.word);
 
@@ -591,7 +590,7 @@ void ppos_set_tangenta(ena_type ena)
 
 
 	 tx_chan0.creg0.inside.bod = 2;
-	 tx_chan0.creg0.inside.code = 0;
+	 tx_chan0.creg0.inside.code = 2;
 	 tx_chan0.creg0.inside.mod = 2;
 	 tx_chan0.creg0.inside.mux_ad9361_din = 5;
 	 tx_chan0.creg0.inside.pkt_len = 0;//544; //576;//4800;//576;
@@ -621,7 +620,7 @@ void ppos_set_tangenta(ena_type ena)
 
 
 	 rx_chan0.creg0.inside.bod = 2;
-	 rx_chan0.creg0.inside.code = 0;
+	 rx_chan0.creg0.inside.code = 2;
 	 rx_chan0.creg0.inside.mod = 2;
 	 rx_chan0.creg0.inside.pkt_len = 0;// 544;//576;// 4800;//576;
 	 rx_chan0.creg0.inside.scr_on = 0;//1;
