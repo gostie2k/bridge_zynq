@@ -5,61 +5,61 @@
 #include <string.h>
 
 /* ===================================================================
- * Flash geometry and config layout
+ *  Геометрия флэш и размещение конфига
  * =================================================================== */
 #define QSPI_DEVICE_ID        XPAR_XQSPIPS_0_DEVICE_ID
 
-#define FLASH_PAGE_SIZE       256u        /* program page size */
-#define FLASH_SECTOR_SIZE     0x10000u    /* 64 KB - erase unit (0xD8) */
+#define FLASH_PAGE_SIZE       256u        /* размер страницы записи */
+#define FLASH_SECTOR_SIZE     0x10000u    /* 64 КБ — единица стирания (0xD8) */
 
-/* Config area base. Chosen within the first 16 MB bank (3-byte addressing,
- * no bank-switch) and safely above the boot image (BOOT.BIN
- * about 4.5 MB). Two copies in adjacent sectors. If changing - keep < 16 MB. */
+/* База области конфига. Выбрана в пределах первого 16-МБ банка (адресация
+ * 3 байта, без bank-switch) и заведомо выше загрузочного образа (BOOT.BIN
+ * ~4.5 МБ). Две копии в соседних секторах. Если менять — держать < 16 МБ. */
 #define CFG_FLASH_BASE        0x00F00000u
 #define CFG_SLOT_A            (CFG_FLASH_BASE)
 #define CFG_SLOT_B            (CFG_FLASH_BASE + FLASH_SECTOR_SIZE)
 
-/* Flash commands (common to Micron/Spansion/Winbond/Macronix/ISSI) */
+/* Команды флэш (общие для Micron/Spansion/Winbond/Macronix/ISSI) */
 #define CMD_WRITE_ENABLE      0x06
 #define CMD_SECTOR_ERASE      0xD8
 #define CMD_PAGE_PROGRAM      0x02
-#define CMD_READ              0x03   /* normal read, 3-byte address, no dummy */
+#define CMD_READ              0x03   /* normal read, 3-байтный адрес, без dummy */
 #define CMD_READ_STATUS       0x05
-#define STATUS_WIP            0x01   /* Write-In-Progress bit of SR */
+#define STATUS_WIP            0x01   /* Write-In-Progress бит SR */
 
-/* cmd(1) + address(3) - header of each transaction */
+/* cmd(1) + address(3) — служебная «шапка» каждой транзакции */
 #define CMD_ADDR_BYTES        4
 
 /* ===================================================================
- * Flash record format
+ *  Формат записи во флэш
  * =================================================================== */
-#define CFG_MAGIC             0x50434647u  /* 'PCFG' (little-endian in memory) */
-#define CFG_VERSION           2u   /* v2: added radio_params (network+radio) */
+#define CFG_MAGIC             0x50434647u  /* 'PCFG' (little-endian в памяти) */
+#define CFG_VERSION           2u   /* v2: добавлены radio_params (сеть+радио) */
 
 struct __attribute__((packed)) cfg_record {
     uint32_t magic;
     uint16_t version;
     uint16_t size;                  /* sizeof(cfg) + sizeof(radio) */
-    uint32_t seq;                   /* monotonic generation counter */
-    struct device_config cfg;       /* network config */
-    struct radio_params  radio;     /* radio parameters (profile, format version 2) */
-    uint32_t crc32;                 /* CRC32 over all record bytes BEFORE this field */
+    uint32_t seq;                   /* монотонный счётчик поколений */
+    struct device_config cfg;       /* сетевой конфиг */
+    struct radio_params  radio;     /* радиопараметры (профиль, версия формата 2) */
+    uint32_t crc32;                 /* CRC32 по всем байтам записи ДО этого поля */
 };
 
 #define CFG_PAYLOAD_SIZE (sizeof(struct device_config) + sizeof(struct radio_params))
 
 /* ===================================================================
- * State
+ *  Состояние
  * =================================================================== */
 static XQspiPs qspi;
 static int     qspi_ready = 0;
 
-/* Transaction buffer: header + one page (whole record write/read) */
+/* Буфер транзакций: шапка + одна страница (запись/чтение записи целиком) */
 static u8 tx_buf[CMD_ADDR_BYTES + FLASH_PAGE_SIZE];
 static u8 rx_buf[CMD_ADDR_BYTES + FLASH_PAGE_SIZE];
 
 /* ===================================================================
- * CRC32 (standard reflected, poly 0xEDB88320)
+ *  CRC32 (стандартный reflected, poly 0xEDB88320)
  * =================================================================== */
 static uint32_t crc32_calc(const void *data, unsigned len)
 {
@@ -74,7 +74,7 @@ static uint32_t crc32_calc(const void *data, unsigned len)
 }
 
 /* ===================================================================
- * Low-level flash operations (polled)
+ *  Низкоуровневые операции флэш (polled)
  * =================================================================== */
 static void flash_wait_ready(void)
 {
@@ -101,7 +101,7 @@ static int flash_read(u32 addr, void *dst, unsigned len)
     tx_buf[3] = addr & 0xFF;
     if (XQspiPs_PolledTransfer(&qspi, tx_buf, rx_buf, CMD_ADDR_BYTES + len) != XST_SUCCESS)
         return -1;
-    memcpy(dst, rx_buf + CMD_ADDR_BYTES, len); /* data follows the header */
+    memcpy(dst, rx_buf + CMD_ADDR_BYTES, len); /* данные идут после шапки */
     return 0;
 }
 
@@ -119,7 +119,7 @@ static int flash_sector_erase(u32 addr)
     return 0;
 }
 
-/* Program one page (len <= 256). addr must be page-aligned. */
+/* Запись одной страницы (len <= 256). addr должен быть выровнен по странице. */
 static int flash_page_program(u32 addr, const void *src, unsigned len)
 {
     if (len > FLASH_PAGE_SIZE) return -1;
@@ -136,7 +136,7 @@ static int flash_page_program(u32 addr, const void *src, unsigned len)
 }
 
 /* ===================================================================
- * Record handling (validate / read slot)
+ *  Работа с записью (валидация / чтение слота)
  * =================================================================== */
 static int record_valid(const struct cfg_record *r)
 {
@@ -147,7 +147,7 @@ static int record_valid(const struct cfg_record *r)
     return (crc == r->crc32);
 }
 
-/* Read a slot and validate. return 1 + *seq if valid. */
+/* Прочитать слот и провалидировать. return 1 + *seq, если валиден. */
 static int slot_read(u32 addr, struct cfg_record *r)
 {
     if (flash_read(addr, r, sizeof(*r)) != 0) return 0;
@@ -155,7 +155,7 @@ static int slot_read(u32 addr, struct cfg_record *r)
 }
 
 /* ===================================================================
- * Public API
+ *  Публичный API
  * =================================================================== */
 int cfg_flash_init(void)
 {
@@ -168,8 +168,8 @@ int cfg_flash_init(void)
         xil_printf("[QSPI] CfgInitialize failed\r\n");
         return -1;
     }
-    /* Manual start + software SS control + HOLD_B drive - the standard
-     * set for app-level flash access (not linear/XIP). */
+    /* Ручной старт + программное управление SS + драйв HOLD_B — стандартный
+     * набор для доступа к флэш из приложения (не linear/XIP). */
     XQspiPs_SetOptions(&qspi, XQSPIPS_MANUAL_START_OPTION |
                               XQSPIPS_FORCE_SSELECT_OPTION |
                               XQSPIPS_HOLD_B_DRIVE_OPTION);
@@ -211,7 +211,7 @@ int cfg_flash_save(const struct device_config *net, const struct radio_params *r
 {
     if (!qspi_ready) return -1;
 
-    /* 1. Read current slot state, pick target (NOT the latest). */
+    /* 1. Узнать текущее состояние слотов, выбрать целевой (НЕ последний). */
     struct cfg_record ra, rb;
     int va = slot_read(CFG_SLOT_A, &ra);
     int vb = slot_read(CFG_SLOT_B, &rb);
@@ -220,13 +220,13 @@ int cfg_flash_save(const struct device_config *net, const struct radio_params *r
     if (va && ra.seq > maxseq) maxseq = ra.seq;
     if (vb && rb.seq > maxseq) maxseq = rb.seq;
 
-    /* Keep the latest valid slot untouched - write the other (A/B rotation). */
+    /* Последний валидный слот не трогаем — пишем в другой (A/B-ротация). */
     u32 target;
     if (!va && !vb)                              target = CFG_SLOT_A;
-    else if (va && (!vb || ra.seq >= rb.seq))     target = CFG_SLOT_B; /* latest is A */
-    else                                          target = CFG_SLOT_A; /* latest is B */
+    else if (va && (!vb || ra.seq >= rb.seq))     target = CFG_SLOT_B; /* последний — A */
+    else                                          target = CFG_SLOT_A; /* последний — B */
 
-    /* 2. Build the record. */
+    /* 2. Собрать запись. */
     struct cfg_record rec;
     memset(&rec, 0, sizeof(rec));
     rec.magic   = CFG_MAGIC;
@@ -237,11 +237,11 @@ int cfg_flash_save(const struct device_config *net, const struct radio_params *r
     rec.radio   = *radio;
     rec.crc32   = crc32_calc(&rec, sizeof(rec) - sizeof(rec.crc32));
 
-    /* 3. Erase target sector and write. */
+    /* 3. Стереть целевой сектор и записать. */
     if (flash_sector_erase(target) != 0)               return -2;
     if (flash_page_program(target, &rec, sizeof(rec)))  return -3;
 
-    /* 4. Verify: read back and compare. */
+    /* 4. Верификация: перечитать и сверить. */
     struct cfg_record back;
     if (!slot_read(target, &back) || back.seq != rec.seq) {
         xil_printf("[QSPI] save VERIFY FAILED (slot 0x%08X)\r\n", target);

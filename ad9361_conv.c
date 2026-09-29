@@ -662,17 +662,18 @@ int32_t ad9361_post_setup(struct ad9361_rf_phy *phy)
 
 	axi_adc_read(rx_adc, ADI_REG_ID, &id);
 
-	ret = ad9361_dig_tune(phy, 61440000, (id) ? flags | RESTORE_DEFAULT : flags);
-
+	//ret = ad9361_dig_tune(phy, 61440000, (id) ? flags | RESTORE_DEFAULT : flags);
+	ret = ad9361_dig_tune(phy, 0, (id) ? flags | RESTORE_DEFAULT : flags);    // BUI IS WORK
 	//ret = ad9361_dig_tune(phy, 25000000, (id) ? flags | RESTORE_DEFAULT : flags);
+
 
 	if (ret < 0)
 		return ret;
 
 	if (flags & (DO_IDELAY | DO_ODELAY)) {
-		ret = ad9361_dig_tune(phy, 61440000,
+		//ret = ad9361_dig_tune(phy, 61440000,
 
-				// ret = ad9361_dig_tune(phy, 25000000,
+				 ret = ad9361_dig_tune(phy, 24000000,
 
 				      (id) ? flags | RESTORE_DEFAULT | BE_VERBOSE : flags | BE_VERBOSE);
 		if (ret < 0)

@@ -21,7 +21,7 @@ extern u16 deb_cnt_rf;
 extern struct ppos_tx tx_chan0;
 extern struct ppos_rx rx_chan0;
 
-/* MAC (ethaddr) is set from current_config.bridge_mac in net_init(). */
+/* MAC (ethaddr) выставляется из current_config.bridge_mac в net_init(). */
 bridgeif_initdata_t bridge_data =
   BRIDGEIF_INITDATA1(5, 1024, 16, ETH_ADDR(0x00,0x00,0x00,0x00,0x00,0x00));
 
@@ -170,33 +170,42 @@ err_t vport3_linkoutput(struct netif *netif, struct pbuf *p) {
 
 
 
+
+#if FW_ENABLE
+	 /* Firewall: кадры, не прошедшие фильтр, в радиоканал не уходят. */
+	 if (!firewall_filter(p, &bridge_netif)) {
+	     return ERR_OK;   /* blocked: drop, do not forward to radio */
+	 }
+#endif
+
+	 deb_cnt_rf++;
+     return radio_linkoutput(netif, p);
+
+
+	/*
 	if (tx_chan0.creg0.inside.pkt_len == 576)
 	{
-#if FW_ENABLE
-	   /* Firewall: drop frames that don't pass the filter before the radio. */
-	   if (!firewall_filter(p, &bridge_netif)) {
-	       return ERR_OK;   /* blocked: drop, do not forward to radio */
-	   }
-#endif
 	   deb_cnt_rf++;
 	   return radio_linkoutput(netif, p);
 	}
 
 
+	if (tx_chan0.creg0.inside.pkt_len == 544)
+	{
+	   deb_cnt_rf++;
+	   return radio_linkoutput(netif, p);
+	}
+
 
 	if (tx_chan0.creg0.inside.pkt_len == 4800)
 	{
-
-
-
-
 	    cmd_push(&buf_cmd,(uint8_t*) p->payload, p->len);
 	    deb_cnt_rf++;
 	    //pbuf_free(p);
 		return out;
 	}
 
-
+*/
 
 
 
@@ -285,7 +294,7 @@ void net_init()
 {
     ip4_addr_t ipb, nmb, gwb, ip2, nm2, gw2;
 
-     /* IP/mask/gateway and bridge MAC - from runtime config */
+     /* IP/маска/шлюз и MAC bridge'а — из рантайм-конфига */
      IP4_ADDR(&ipb, current_config.ip[0], current_config.ip[1],
                     current_config.ip[2], current_config.ip[3]);
      IP4_ADDR(&nmb, current_config.netmask[0], current_config.netmask[1],
@@ -302,9 +311,9 @@ void net_init()
                (void*)&bridge_data,
                bridgeif_init, ethernet_input); //eth_inp);
 
-     /* NETIF_FLAG_BROADCAST is required, otherwise ip4_addr_isbroadcast()
-      * won't recognize directed-broadcast (192.168.250.255) and ip4_input
-      * drops it. Limited-broadcast (255.255.255.255) passes without the flag. */
+     /* NETIF_FLAG_BROADCAST обязателен, иначе ip4_addr_isbroadcast() не
+      * признаёт directed-broadcast (192.168.250.255) и ip4_input его дропает.
+      * Limited-broadcast (255.255.255.255) проходит и без флага. */
      bridge_netif.flags|= NETIF_FLAG_ETHARP | NETIF_FLAG_ETHERNET | NETIF_FLAG_BROADCAST;
 
 

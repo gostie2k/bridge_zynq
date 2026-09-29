@@ -554,10 +554,10 @@ void ppos_set_tangenta(ena_type ena)
 	 ppos.creg4.inside.txnrx_hold  = 25;
 
 
-	 ppos.creg4.inside.vco_setup   =  3;
+	 ppos.creg4.inside.vco_setup   =  25;
 
 #ifdef  IS_SLAVE
-	 ppos.creg4.inside.num_seg = 1;
+	 ppos.creg4.inside.num_seg = 14;
 #else
 	 ppos.creg4.inside.num_seg = 1;
 #endif
@@ -574,7 +574,9 @@ void ppos_set_tangenta(ena_type ena)
 
 
 
-	 ppos.creg5.inside.slot_dur = 600;//1000;
+	 /* Слот 6250 мкс: при 14 сегментах слейва это 14*226 = 3164 мкс эфира,
+	  * плюс сегмент мастера — в слот укладывается. На 600 мкс не влезало. */
+	 ppos.creg5.inside.slot_dur = 6250;
 
 	 AXI_CNTRL_REG_WRITE(AXI_CNTRL_REG_BASEADDR, 20, ppos.creg5.word);
 
@@ -592,8 +594,8 @@ void ppos_set_tangenta(ena_type ena)
 	 tx_chan0.creg0.inside.code = 0;
 	 tx_chan0.creg0.inside.mod = 2;
 	 tx_chan0.creg0.inside.mux_ad9361_din = 5;
-	 tx_chan0.creg0.inside.pkt_len = 576;//4800;//576;
-	 tx_chan0.creg0.inside.scr_on = 1;
+	 tx_chan0.creg0.inside.pkt_len = 0;//544; //576;//4800;//576;
+	 tx_chan0.creg0.inside.scr_on = 0;//1;
 	 tx_chan0.creg0.inside.gain = 0;
 	 tx_chan0.creg0.inside.run = 0;
 
@@ -621,8 +623,8 @@ void ppos_set_tangenta(ena_type ena)
 	 rx_chan0.creg0.inside.bod = 2;
 	 rx_chan0.creg0.inside.code = 0;
 	 rx_chan0.creg0.inside.mod = 2;
-	 rx_chan0.creg0.inside.pkt_len = 576;// 4800;//576;
-	 rx_chan0.creg0.inside.scr_on = 1;
+	 rx_chan0.creg0.inside.pkt_len = 0;// 544;//576;// 4800;//576;
+	 rx_chan0.creg0.inside.scr_on = 0;//1;
 	 rx_chan0.creg0.inside.rcos_filt_on = 1;
 	 rx_chan0.creg0.inside.rot_on = 1;
 	 rx_chan0.creg0.inside.freq_shift_on = 0;
@@ -632,12 +634,24 @@ void ppos_set_tangenta(ena_type ena)
 	 AXI_CNTRL_REG_WRITE(AXI_CNTRL_REG_BASEADDR + RX_CHAN0_PAR_OFFSET, 0, rx_chan0.creg0.word);
 
 
+	 rx_chan0.creg0.inside.run = 1;
+
+	 AXI_CNTRL_REG_WRITE(AXI_CNTRL_REG_BASEADDR + RX_CHAN0_PAR_OFFSET, 0, rx_chan0.creg0.word);
+
+
+
  	 rx_chan0.creg1.inside.ad9361_rx_freq = 3500000;
      AXI_CNTRL_REG_WRITE(AXI_CNTRL_REG_BASEADDR + RX_CHAN0_PAR_OFFSET, 1*4,  (u32) rx_chan0.creg1.word);
 
      freq =  rx_chan0.creg1.word;
      freq = freq*1000;
      ad9361_set_rx_lo_freq (ad9361_phy, freq);
+
+
+
+     //enable start read pars ad9361
+     AXI_CNTRL_REG_WRITE(AXI_CNTRL_REG1_BASEADDR + 15*4, 0,  (u32) 0x00000001);
+
 
 
 

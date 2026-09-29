@@ -34,8 +34,8 @@
 #include "xil_printf.h"
 #include "watchdog.h"
 #include "platform_config.h"   /* FW_VERSION / WDT_ENABLED_DEFAULT */
-#include "cfg_flash.h"         /* config storage in QSPI (unification, Phase 3) */
-#include "radio_params.h"      /* profile radio parameters (current_radio) */
+#include "cfg_flash.h"         /* хранение конфига в QSPI (унификация, Фаза 3) */
+#include "radio_params.h"      /* радиопараметры профиля (current_radio) */
 
 #include "vid_buf.h"
 #include "cmd_buf.h"
@@ -84,21 +84,23 @@ struct cmd_pkt* zero_cmd_pkt;
 struct ppos_tx tx_chan0;
 struct ppos_rx rx_chan0;
 struct ppos_par ppos;
-struct peleng pel;   /* peleng (colleague edits), control: 0xA0 group=4 */
+struct peleng pel;   /* пеленг (правки коллеги), управление: 0xA0 group=4 */
 
 
 uint32_t mean_dist;
 
 
+extern struct deb_chan_rx buf_deb_chan_rx[BUF_DEB_CHAN_RX_DEPTH];
+extern uint32_t buf_deb_chan_rx_wad;
+extern uint32_t buf_deb_chan_rx_rad;
 
 
-
-//u32 temp_rx_words[47]; // buffer to read 47 words (188 bytes) from FIFO
-//    uint8_t temp_rx_block[188]; // byte buffer
+//u32 temp_rx_words[47]; // Буфер для чтения 47 слов (188 байт) из FIFO
+//    uint8_t temp_rx_block[188]; // Буфер для байтов
 //    int rx_word_idx;
 
-#define PL_TX_BLOCK_SIZE  188   // block size for radio_input_block
-#define PL_RX_MAX_SIZE    256   // max RX size (with margin)
+#define PL_TX_BLOCK_SIZE  188   // Размер блока для radio_input_block
+#define PL_RX_MAX_SIZE    256   // Максимальный размер RX (с запасом)
 
 u32     temp_rx_words[PL_RX_MAX_SIZE / 4];
 uint8_t temp_rx_block[PL_RX_MAX_SIZE];
@@ -251,6 +253,7 @@ u16_t RemotePortRx = 5018;
 //u16_t RemotePortTxDebug = 28;
 //u16_t RemotePortRxDebug = 58;
 u16_t RemotePortDeb = 5078;
+u16_t RemotePortRxDebAppend = 5098;
 
 u16_t RemotePortStatus = 5007;
 
@@ -258,7 +261,7 @@ u16_t RemotePortStatus = 5007;
 //------MERGE--------------
 struct udp_pcb *cmd_udp_pcb;
 struct udp_pcb *status_pcb;
-u16_t CmdPort = 60012;  // port for receiving control commands
+u16_t CmdPort = 60012;  // порт для приема команд управления
 
 u16_t StatusPort = 5008;
 //------MERGE--------------
@@ -366,6 +369,9 @@ uint8_t fifo_rx_rad=0;
 //void init_buf_header(struct krt_gr_dat* fifo_krt_gr_dat);
 //void fifo_rx_buf_check(struct krt_gr_dat* rx_buf, uint8_t* rx_wad);
 //void fifo_rx_buf_write(struct krt_gr_dat* rx_buf,uint8_t* rx_rad);
+
+
+void send_deb_rx_append();
 
 
 void fifo_rx_buf_check(struct vid_pkt* rx_buf, uint8_t* rx_wad);
@@ -499,14 +505,23 @@ AD9361_InitParam default_init_param = {
 	//{1152000000, 144000000, 48000000, 24000000, 12000000, 12000000},// rx_path_clock_frequencies[6] *** adi,rx-path-clock-frequencies
     //{1152000000, 144000000, 48000000, 24000000, 12000000, 12000000},// tx_path_clock_frequencies[6] *** adi,tx-path-clock-frequencies
 
-	{1152000000, 288000000, 96000000, 48000000, 24000000, 24000000}, // rx_path_clock_frequencies[6] *** adi,rx-path-clock-frequencies
-    {1152000000, 288000000, 96000000, 48000000, 24000000, 24000000}, // tx_path_clock_frequencies[6] *** adi,tx-path-clock-frequencies
+	//{1152000000, 288000000, 96000000, 48000000, 24000000, 24000000}, // rx_path_clock_frequencies[6] *** adi,rx-path-clock-frequencies
+    //{1152000000, 288000000, 96000000, 48000000, 24000000, 24000000}, // tx_path_clock_frequencies[6] *** adi,tx-path-clock-frequencies
+
+
+	{960000000, 240000000, 120000000,  60000000,  30000000, 30000000},  // rx_path_clock_frequencies[6]
+	{960000000, 240000000, 120000000,  60000000,  30000000, 30000000},  // tx_path_clock_frequencies[6]
+
+
+	//{1152000000, 288000000, 144000000,  72000000,  36000000, 36000000}, // rx_path_clock_frequencies[6]
+	//{1152000000, 288000000, 144000000,  72000000,  36000000, 36000000},  // tx_path_clock_frequencies[6]
+
 
     //5000000,//rf_rx_bandwidth_hz *** adi,rf-rx-bandwidth-hz
     //5000000,//rf_tx_bandwidth_hz *** adi,rf-tx-bandwidth-hz
 
-    12000000,//rf_rx_bandwidth_hz *** adi,rf-rx-bandwidth-hz
-    12000000,//rf_tx_bandwidth_hz *** adi,rf-tx-bandwidth-hz
+    8000000,//rf_rx_bandwidth_hz *** adi,rf-rx-bandwidth-hz
+    8000000,//rf_tx_bandwidth_hz *** adi,rf-tx-bandwidth-hz
 
    #ifdef IS_ANTSDR
 	/* RF Port Control */
@@ -963,7 +978,7 @@ bool is_cntrl_pkt_end = false;
 float pow_cntrl_tx;
 float pow_rx;
 uint8_t gain_index_rx;
-bool is_pow_rx = false;
+//bool is_pow_rx = false;
 bool is_pow_cntrl_tx = false;
 
 
@@ -1075,7 +1090,7 @@ if (  ((Status&0x20000000) == 0x20000000)&&(Bank == 3))
   ppos.creg7.inside.del_ack = Xil_In32(AXI_CNTRL_REG_BASEADDR + 7*4);
 */
 
-  is_pow_rx = true;
+//  is_pow_rx = true;
 
  // printf("#1 %.2f dB \n\r", rssi);
 
@@ -1165,8 +1180,8 @@ if (  ((Status&0x20000000) == 0x20000000)&&(Bank == 3))
 u32_t sys_now(void) {
     XTime tCur;
     XTime_GetTime(&tCur);
-    // Convert timer counts to milliseconds
-    // Timer freq on Zynq is usually COUNTS_PER_SECOND = CPU_3x2x_CLK / 2
+    // Преобразуем такты таймера (counts) в миллисекунды
+    // Частота таймера в Zynq обычно COUNTS_PER_SECOND = CPU_3x2x_CLK / 2
     return (u32_t)(tCur / (COUNTS_PER_SECOND / 1000));
 }
 
@@ -1187,21 +1202,21 @@ bool led_tog =true;
 
 
 /* ===================================================================
- * Unification: runtime role change (Phase 2)
+ *  Унификация: рантайм-смена роли (Фаза 2)
  * =================================================================== */
 
-/* Deferred reinit: the role-change command sets a flag, the reinit
- * itself runs in the main loop (cannot free cmd_udp_pcb inside its
- * own recv-callback). */
+/* Отложенный reinit: команда смены роли ставит флаг, сам reinit
+ * выполняется в main loop (нельзя освобождать cmd_udp_pcb внутри его
+ * собственного recv-колбэка). */
 static volatile bool        g_cfg_reinit_pending = false;
 static struct device_config g_cfg_pending;
 
-/* Deferred save/erase of config in QSPI flash. The real write happens
- * in the main loop (sector erase blocks ~1 s; not allowed in a UDP callback). */
+/* Отложенное сохранение/стирание конфига во флэш QSPI. Реальная запись —
+ * в main loop (стирание сектора блокирует ~1 с; нельзя в UDP-колбэке). */
 static volatile bool        g_cfg_save_pending  = false;
 static volatile bool        g_cfg_erase_pending = false;
 
-/* (Re)create UDP listeners. Called from main() and from device_reinit(). */
+/* (Пере)создание UDP-листенеров. Вызывается из main() и из device_reinit(). */
 static void init_udp_listeners(void)
 {
     status_pcb = udp_new(); // send status & debug pkts
@@ -1226,17 +1241,17 @@ static void init_udp_listeners(void)
     udp_bind_netif(debug_pcb, &bridge_netif);
 }
 
-/* "Soft" reinit: change network identity (IP + MAC) and recreate
- * UDP listeners for the new IP. GEM/netif are NOT torn down (repeated xemac_add
- * leaks memory and reinitializes GEM; promiscuous is already on, so
- * the hardware MAC does not matter for RX, the outgoing src-MAC comes from hwaddr). */
-/* Write the PL role-select bit (ppos.creg3.MasterNSlave) for the current role.
- * By field name (like AD9361_TXnRX: 1=TX) we treat 1 = MASTER, 0 = SLAVE.
- * WARNING: if PL reads the bit the other way - flip the condition here. Other creg3 bits
- * (AD9361_ENABLE/TXnRX etc.) are preserved. */
-/* Rebuild creg3 for the current role - as in modem_init (MASTER: MasterNSlave=1,
- * SLAVE: 0; polarity confirmed in modem.c). Sets the whole role/TDMA bit set,
- * not just MasterNSlave: otherwise the PL TDMA engine does not match the new role. */
+/* "Мягкий" reinit: меняем сетевую идентичность (IP + MAC) и пересоздаём
+ * UDP-листенеры под новый IP. GEM/netif НЕ сносим (xemac_add повторно
+ * течёт памятью и реинициализирует GEM; промискуитет уже включён, так что
+ * для приёма MAC в железе не важен, а исходящий src-MAC берётся из hwaddr). */
+/* Записать PL-бит выбора роли (ppos.creg3.MasterNSlave) под текущую роль.
+ * По имени поля (аналогично AD9361_TXnRX: 1=TX) считаем 1 = MASTER, 0 = SLAVE.
+ * ⚠ Если PL трактует бит наоборот — поменять условие здесь. Прочие биты creg3
+ * (AD9361_ENABLE/TXnRX и т.д.) сохраняются. */
+/* Перестроить creg3 под текущую роль — как в modem_init (MASTER: MasterNSlave=1,
+ * SLAVE: 0; полярность подтверждена modem.c). Задаёт весь набор role/TDMA-битов,
+ * а не только MasterNSlave: иначе PL-движок TDMA не согласуется с новой ролью. */
 static void apply_role_to_pl(void)
 {
     ppos.creg3.word = 0;
@@ -1258,22 +1273,22 @@ static int device_reinit(const struct device_config *new_cfg)
                new_cfg->role, new_cfg->ip[0], new_cfg->ip[1],
                new_cfg->ip[2], new_cfg->ip[3]);
 
-    /* 1. Freeze data path */
+    /* 1. Заморозить data path */
     is_run = false;
 
-    /* 2. Tear down UDP listeners (bound to the old IP) */
+    /* 2. Снести UDP-листенеры (привязаны к старому IP) */
     if (status_pcb)   { udp_remove(status_pcb);   status_pcb   = NULL; }
     if (cmd_udp_pcb)  { udp_remove(cmd_udp_pcb);   cmd_udp_pcb  = NULL; }
     if (recv_pcb)     { udp_remove(recv_pcb);      recv_pcb     = NULL; }
     if (send_rx_data) { udp_remove(send_rx_data);  send_rx_data = NULL; }
     if (debug_pcb)    { udp_remove(debug_pcb);     debug_pcb    = NULL; }
 
-    /* 3. Apply new config */
+    /* 3. Применить новый конфиг */
     current_config = *new_cfg;
     IP4_ADDR(&RemoteAddr, current_config.peer_ip[0], current_config.peer_ip[1],
                           current_config.peer_ip[2], current_config.peer_ip[3]);
 
-    /* 4. IP + MACs in-place */
+    /* 4. IP + MAC'и in-place */
     {
         ip4_addr_t ip, nm, gw;
         IP4_ADDR(&ip, current_config.ip[0], current_config.ip[1],
@@ -1289,29 +1304,29 @@ static int device_reinit(const struct device_config *new_cfg)
     memcpy(bridge_netif.hwaddr,    current_config.bridge_mac, 6);
     memcpy(bridge_data.ethaddr.addr, current_config.bridge_mac, 6);
 
-    /* 4.5. Role change restarts the PL TDMA engine (creg3: MasterNSlave/ENABLE_AUTO).
-     * Flipping this on a live radio is not allowed - PL desyncs. So:
-     *   1) stop the TDMA engine (ENABLE_AUTO=0),
-     *   2) reset FIFO (drop in-flight blocks of the old role),
-     *   3) rebuild creg3 for the new role (ENABLE_AUTO=1 back). */
+    /* 4.5. Смена роли рестартует PL TDMA-движок (creg3: MasterNSlave/ENABLE_AUTO).
+     * Флипать это на живом радио нельзя — PL десинхронизируется. Поэтому:
+     *   1) гасим TDMA-движок (ENABLE_AUTO=0),
+     *   2) сбрасываем FIFO (дропаем «на лету» блоки старой роли),
+     *   3) перестраиваем creg3 под новую роль (ENABLE_AUTO=1 обратно). */
     ppos.creg3.inside.ENABLE_AUTO = 0;
     AXI_CNTRL_REG_WRITE(AXI_CNTRL_REG_BASEADDR, 12, ppos.creg3.word);
     XLlFifo_IntClear(&fifo, 0xFFFFFFFF);
     XLlFifo_Reset(&fifo);
     apply_role_to_pl();
 
-    /* 5. Recreate listeners for the new IP */
+    /* 5. Пересоздать листенеры под новый IP */
     init_udp_listeners();
 
-    /* 6. Clean start of radio_stream counters for the new role */
+    /* 6. Чистый старт счётчиков radio_stream под новую роль */
     radio_stream_reset_stats();
     radio_stream_reset_rx_ids();
 
-    /* 7. Start up */
+    /* 7. Запуститься */
     is_run = true;
 
-    /* Broadcast gratuitous ARP - so neighbors and the switch immediately update
-     * IP->MAC (otherwise they keep the old MAC until the entry ages out). */
+    /* Разослать gratuitous ARP — чтобы соседи и коммутатор сразу обновили
+     * IP->MAC (иначе держат старый MAC до устаревания записи). */
     etharp_gratuitous(&bridge_netif);
 
     xil_printf("[CFG] reinit done: role=%d id=%d\r\n",
@@ -1319,21 +1334,21 @@ static int device_reinit(const struct device_config *new_cfg)
     return 0;
 }
 
-/* Request a config change from any context (incl. UDP callback).
- * The real reinit is deferred to the main loop. */
+/* Запросить смену конфига из любого контекста (в т.ч. UDP-колбэка).
+ * Реальный reinit отложен до main loop. */
 void device_request_reinit(const struct device_config *new_cfg)
 {
     g_cfg_pending        = *new_cfg;
     g_cfg_reinit_pending = true;
 }
 
-/* Save current config to flash - deferred to the main loop. */
+/* Сохранить текущий конфиг во флэш — отложено до main loop. */
 void device_request_save(void)
 {
     g_cfg_save_pending = true;
 }
 
-/* Factory reset (erase flash config) - deferred to the main loop. */
+/* Сброс к заводским (стереть флэш-конфиг) — отложено до main loop. */
 void device_request_erase(void)
 {
     g_cfg_erase_pending = true;
@@ -1342,8 +1357,8 @@ void device_request_erase(void)
 
 int main()
 {
-	/* Read SLCR.REBOOT_STATUS before any register reset - shows whether the
-	 * last reset was from the watchdog (crash_section). */
+	/* Прочитать SLCR.REBOOT_STATUS до любого ресета регистров — покажет, был ли
+	 * последний ресет от watchdog (crash_section). */
 	wdt_capture_reboot_status();
 
 	status_modem = 	stat_modem_init();
@@ -1576,9 +1591,9 @@ int main()
 
     AXI_CNTRL_REG_WRITE(AXI_CNTRL_REG_BASEADDR, 20, ppos.creg5.word);
 
-
-
-
+    ppos.creg1.word = 0;
+    ppos.creg1.inside.ad9361_spi_typ = 1;
+    AXI_CNTRL_REG_WRITE(AXI_CNTRL_REG_BASEADDR, 4, ppos.creg1.word);
 
 
 
@@ -1903,31 +1918,31 @@ modem_init();
 //platform_enable_interrupts();
 
 
-    /* Seed runtime config from IS_MASTER/IS_SLAVE (unification Phase 1).
-     * Must be before net_init() and before using RemoteAddr. */
+    /* Сид рантайм-конфига из IS_MASTER/IS_SLAVE (Фаза 1 унификации).
+     * Должно быть до net_init() и до использования RemoteAddr. */
     config_init_defaults_from_build();
 
-    /* Radio parameters: default = snapshot of LIVE registers after modem_init() (it has
-     * already run above), then - override from the QSPI profile if present. */
+    /* Радиопараметры: дефолт = снимок ЖИВЫХ регистров после modem_init() (он уже
+     * отработал выше), затем — перекрытие из QSPI-профиля, если он есть. */
     radio_params_capture(&current_radio);
 
-    /* Phase 3: override defaults with the saved PROFILE from QSPI (network + radio), if
-     * a valid one exists. Must be before apply_role_to_pl()/RemoteAddr/net_init(), so
-     * role/IP/MAC come up straight from flash. modem_init() already ran above (baseline),
-     * so the applied profile overrides the built-in radio defaults. No valid
-     * copy - defaults remain. */
+    /* Фаза 3: перекрыть дефолты сохранённым ПРОФИЛЕМ из QSPI (сеть + радио), если
+     * есть валидный. Должно быть до apply_role_to_pl()/RemoteAddr/net_init(), чтобы
+     * роль/IP/MAC поднялись сразу из флэш. modem_init() уже отработал выше (baseline),
+     * поэтому применённый профиль перекрывает зашитые радио-дефолты. Нет валидной
+     * копии — остаются дефолты. */
     if (cfg_flash_init() == 0) {
         struct device_config loaded;
         struct radio_params  loaded_radio;
         if (cfg_flash_load(&loaded, &loaded_radio)) {
             current_config = loaded;
             current_radio  = loaded_radio;
-            radio_params_apply(&current_radio);   /* freq/attenuation/peleng from the profile */
+            radio_params_apply(&current_radio);   /* частоты/аттенюация/пеленг из профиля */
         }
     }
 
-    /* Set the PL role bit for the startup role (creg3 with AD9361 bits already
-     * written above, here we only adjust MasterNSlave). */
+    /* Выставить PL-бит роли под стартовую роль (creg3 с AD9361-битами уже
+     * записан выше, здесь только уточняем MasterNSlave). */
     apply_role_to_pl();
 
     IP4_ADDR(&RemoteAddr, current_config.peer_ip[0], current_config.peer_ip[1],
@@ -1980,11 +1995,11 @@ lwip_init();
     platform_enable_interrupts();
     is_run = true;
 
-    /* FW banner (version/role) - UART already up. */
+    /* FW-баннер (версия/роль) — UART уже поднят. */
     xil_printf("\r\n[FW] %s\r\n", FW_BUILD_STR);
 
-    /* Start watchdog last - all inits done. GIC initialized
-     * in platform_setup_interrupts. Start per WDT_ENABLED_DEFAULT; toggle 0x90 0x4C. */
+    /* Watchdog запускаем последним — все init'ы выполнены. GIC инициализирован
+     * в platform_setup_interrupts. Старт по WDT_ENABLED_DEFAULT; тумблер 0x90 0x4C. */
     if (wdt_init((struct XScuGic *)&ScuGic) == 0) {
         if (WDT_ENABLED_DEFAULT) wdt_start();
     }
@@ -1992,26 +2007,26 @@ lwip_init();
     while(1)
     {
     	wdt_hb_main();
-    	wdt_section_mark(WDT_SEC_OTHER);   /* default - overridden below */
+    	wdt_section_mark(WDT_SEC_OTHER);   /* по умолчанию — переопределяется ниже */
 
-    	/* Deferred role/config change (requested from UDP callback) */
+    	/* Отложенная смена роли/конфига (запрошена из UDP-колбэка) */
     	if (g_cfg_reinit_pending) {
     		g_cfg_reinit_pending = false;
     		wdt_kick();
     		device_reinit(&g_cfg_pending);
     	}
 
-    	/* Deferred config save to QSPI flash (blocks ~1 s - disable WDT).
-    	 * Write AFTER reinit, so the applied current_config goes to flash. */
+    	/* Отложенное сохранение конфига во флэш QSPI (блокирует ~1 с — гасим WDT).
+    	 * Пишем ПОСЛЕ reinit, чтобы во флэш ушёл уже применённый current_config. */
     	if (g_cfg_save_pending) {
     		g_cfg_save_pending = false;
     		wdt_kick();
-    		radio_params_capture(&current_radio);   /* snapshot of live registers (creg-panel) */
+    		radio_params_capture(&current_radio);   /* снимок живых регистров (creg-панель) */
     		cfg_flash_save(&current_config, &current_radio);
     		wdt_kick();
     	}
 
-    	/* Deferred factory reset (erase flash config). */
+    	/* Отложенный сброс к заводским (стереть флэш-конфиг). */
     	if (g_cfg_erase_pending) {
     		g_cfg_erase_pending = false;
     		wdt_kick();
@@ -2031,38 +2046,42 @@ lwip_init();
 
         //	printf("FIFO ERROR !!!!!!!!!!! \n\r");
 
-        	//Xil_Out32(FIFO_RX_DEV_BASE_ADDR + XLLF_RDFR_OFFSET, 0xA5); // RX FIFO reset [PG080]
-        	//Xil_Out32(FIFO_RX_DEV_BASE_ADDR + XLLF_ISR_OFFSET, 0xFFFFFFFF); // clear statuses [PG080]
+        	//Xil_Out32(FIFO_RX_DEV_BASE_ADDR + XLLF_RDFR_OFFSET, 0xA5); // Сброс RX FIFO [PG080]
+        	//Xil_Out32(FIFO_RX_DEV_BASE_ADDR + XLLF_ISR_OFFSET, 0xFFFFFFFF); // Очистка статусов [PG080]
 
         //}
 
 
-    if ( rx_chan0.creg0.inside.pkt_len == 4800 )
-            {
-    		  fifo_rx_buf_write(&fifo_rx_buf[0],&fifo_rx_wad, &cmd_rx_buf[0]);
-    		}
+    //if ( rx_chan0.creg0.inside.pkt_len == 4800 )
+    //        {
+    //		  fifo_rx_buf_write(&fifo_rx_buf[0],&fifo_rx_wad, &cmd_rx_buf[0]);
+    //		}
 
-    if ( rx_chan0.creg0.inside.pkt_len == 576  ) drain_rx_fifo();
-
-
-
+    //if ( rx_chan0.creg0.inside.pkt_len == 576  ) drain_rx_fifo();
+    //if ( rx_chan0.creg0.inside.pkt_len == 544  ) drain_rx_fifo();
 
 
-
-   	if ( tx_chan0.creg0.inside.pkt_len == 4800 )
-    		{
-    		 cmd_buf_exch(buf_cmd, cmd_out);
-    		 send_cmd();
-    		}
-
-    	if ( tx_chan0.creg0.inside.pkt_len == 576  )
-    	   {
-    		 tx_process();
-    		 radio_tx_periodic_flush();
-    	   }
+         drain_rx_fifo();
 
 
+   	//if ( tx_chan0.creg0.inside.pkt_len == 4800 )
+    //		{
+    //		 cmd_buf_exch(buf_cmd, cmd_out);
+    //		 send_cmd();
+    //		}
 
+    //	if ( tx_chan0.creg0.inside.pkt_len == 576  )
+    //	   {
+    //		 tx_process();
+    //		 radio_tx_periodic_flush();
+    //	   }
+
+
+    //   	if ( tx_chan0.creg0.inside.pkt_len == 544  )
+    //    	   {
+        		 tx_process();
+        		 radio_tx_periodic_flush();
+    //    	   }
 
 
 
@@ -2159,7 +2178,7 @@ lwip_init();
     	wdt_section_mark(WDT_SEC_POST_LWIP);
     	wdt_hb_lwip();
 
-        // Handle timers (ARP, TCP, DHCP)
+        // Обработка таймеров (ARP, TCP, DHCP)
         //sys_check_timeouts();
 
 
@@ -2168,28 +2187,28 @@ lwip_init();
     	wdt_section_mark(WDT_SEC_OTHER);
 
 
-
+/*
 
     	if (is_pow_rx)
     		{
 
 
-    		  uint8_t d[] = {0x01,0x61,0x00,0x00};
-    		  no_os_spi_write_and_read(&desc_tmp,&d[0],1);
+    		  //uint8_t d[] = {0x01,0x61,0x00,0x00};
+    		  //no_os_spi_write_and_read(&desc_tmp,&d[0],3);
     		  //xil_printf("%02X ", d[2]);
 
-    		  float rssi = -d[2];
-    		  rssi/=4.;
+    		  //float rssi = -d[2];
+    		  //rssi/=4.;
 
-    		  d[0] = 0x02; d[1] = 0xb0;
-    		  no_os_spi_write_and_read(&desc_tmp,&d[0],1);
+    		  //d[0] = 0x02; d[1] = 0xb0;
+    		  //no_os_spi_write_and_read(&desc_tmp,&d[0],3);
     		  //xil_printf("%02X", d[2]);
 
-    		  rssi-=d[2];
+    		  //rssi-=d[2];
 
-    		  gain_index_rx = d[2];
+    		  //gain_index_rx = d[2];
 
-    		  pow_rx = rssi + 13.9397;//3500 tone corection
+    		  //pow_rx = rssi + 13.9397;//3500 tone corection
 
 
 
@@ -2239,7 +2258,7 @@ lwip_init();
     		}
 
 
-
+*/
 
 
 
@@ -2368,6 +2387,7 @@ lwip_init();
     	 {
     		 mem_time=cur_time;
 
+
     		 if (led_tog)
     		 {
     			 XGpioPs_WritePin(&Gpio_Ps, 14, 0);
@@ -2381,7 +2401,7 @@ lwip_init();
 
     		 led_tog = !led_tog;
 
-    		 int32_t t;
+    		 int32_t t = 0;
     		 ad9361_get_temperature(ad9361_phy, &t);
     		 float tf = 0;
 
@@ -2402,6 +2422,30 @@ lwip_init();
     		//printf("Zynq Temp = %.1f \n\r", TempData);
 
     		 status_modem->TempFPGA = TempData;
+
+
+
+   		     uint8_t d[] = {0x01,0x61,0x00,0x00};
+   		     no_os_spi_write_and_read(&desc_tmp,&d[0],3);
+   		     //xil_printf("%02X ", d[2]);
+
+   		      float rssi = -d[2];
+   		      rssi/=4.;
+
+   		      d[0] = 0x02; d[1] = 0xb0;
+   		      no_os_spi_write_and_read(&desc_tmp,&d[0],3);
+   		      //xil_printf("%02X", d[2]);
+
+   		      rssi-=d[2];
+
+   		      gain_index_rx = d[2];
+
+   		      pow_rx = rssi + 13.9397;//3500 tone corection
+
+
+   		      status_modem->status_rx.max_pow = pow_rx;
+   	    	  status_modem->status_rx.max_gain_index = gain_index_rx;
+
 
 
 
@@ -2550,7 +2594,12 @@ lwip_init();
 
 
 
-    	wdt_kick();
+    	 send_deb_rx_append();
+
+    	 /* Сторожевой таймер: гладим в конце каждой итерации главного цикла.
+    	  * Должен стоять последним — если что-то выше зависнет, кормления
+    	  * не случится и WDT перезагрузит PS. */
+    	 wdt_kick();
     }
 
     cleanup_platform();
@@ -3348,23 +3397,6 @@ static u32 uart_cmd_chan(u32 cnt_uart_rx_buf, u32 *buf, XUartPs *uart_ptr, struc
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 static int debug_ram_load(u32 *bufff_cnt, uint8_t *bufff, XGpioPs *gpio_ptr, XUartPs *uart_ptr)
 {
 	   u32 RecvChar;
@@ -3704,13 +3736,13 @@ int init_tx_rx_fifo() {
 
     /* Right after reset the TX vacancy equals the full FIFO depth. It is a
      * build-time IP parameter and is not exported to xparameters.h, so this
-     * is the only way to learn it from software. One block costs
-     * (188+28)/4 = 54 words. */
+     * is the only way to learn it from software. На новой платформе
+     * обрамление снято, поэтому один сегмент стоит 188/4 = 47 слов. */
     {
         u32 depth = XLlFifo_iTxVacancy(&fifo);
         radio_stream_set_fifo_depth(depth);
         xil_printf("[FIFO] TX depth = %u words (%u bytes, %u blocks)\r\n",
-                   (unsigned)depth, (unsigned)depth * 4, (unsigned)depth / 54);
+                   (unsigned)depth, (unsigned)depth * 4, (unsigned)depth / 47);
     }
     return XST_SUCCESS;
 }
@@ -3730,7 +3762,7 @@ int init_deb_fifo() {
 
 
 
-// Generic byte-send function
+// Универсальная функция отправки байта
 void send_response_byte(XUartPs *uart_ptr, u8 byte) {
     if (current_cmd_source == CMD_SRC_UART) {
         if (uart_ptr) {
@@ -3849,6 +3881,48 @@ for (int i = 0; i < size; i++) {
  return;
 
 }
+
+
+
+
+
+
+
+
+
+
+void send_deb_rx_append() {
+
+
+	if ( buf_deb_chan_rx_wad ==  buf_deb_chan_rx_rad) return;
+
+
+    struct pbuf *p = pbuf_alloc(PBUF_TRANSPORT, sizeof(struct deb_chan_rx), PBUF_RAM);
+    if (!p) {
+        xil_printf("Failed to allocate pbuf for buf_deb_chan_rx\n\r");
+        return;
+    }
+
+    memcpy((uint8_t*) p->payload, (uint8_t*) &buf_deb_chan_rx[buf_deb_chan_rx_rad],  sizeof(struct deb_chan_rx));
+
+    buf_deb_chan_rx_rad++;
+    if (buf_deb_chan_rx_rad == BUF_DEB_CHAN_RX_DEPTH) buf_deb_chan_rx_rad = 0;
+
+
+    err_t out = udp_sendto(status_pcb, p, &RemoteAddr, RemotePortRxDebAppend);
+
+
+    if (out != ERR_OK) {
+        xil_printf("Error udp_sendto debug_pcb: %d\n\r", out);
+    }
+
+    pbuf_free(p);
+
+    return;
+
+}
+
+
 
 
 

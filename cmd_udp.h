@@ -3,8 +3,8 @@
 //#include "lwip/udp.h"
 //#include "lwip/ip_addr.h"
 //
-//// UDP command handler for the 0x90 protocol
-//// Register via: udp_recv(cmd_udp_pcb, cmd_udp_callback, NULL);
+//// UDP-обработчик команд протокола 0x90
+//// Регистрировать через: udp_recv(cmd_udp_pcb, cmd_udp_callback, NULL);
 //void cmd_udp_callback(void *arg, struct udp_pcb *upcb,
 //                      struct pbuf *p, const ip_addr_t *addr, u16_t port);
 #pragma once

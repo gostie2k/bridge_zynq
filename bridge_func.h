@@ -34,8 +34,8 @@
 
 #define DEB_FUNC  0
 
-/* bridge_data is filled at runtime from current_config (see net_init).
- * ethaddr is set before netif_add. */
+/* bridge_data заполняется в рантайме из current_config (см. net_init).
+ * MAC внутри (ethaddr) выставляется перед netif_add. */
 extern bridgeif_initdata_t bridge_data;
 
 
@@ -51,7 +51,7 @@ typedef struct {
     bridgeif_fdb_dynamic_entry_t *fdb;
 } bridgeif_fdb_dynamic_t;
 
-/* MACs (mac1=GEM, mac3=radio) live in current_config, filled in net_init. */
+/* MAC'и (mac1=GEM, mac3=radio) теперь в current_config, заполняются в net_init. */
 
 
 

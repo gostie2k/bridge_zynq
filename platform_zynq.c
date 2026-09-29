@@ -156,15 +156,15 @@ int platform_setup_interrupts(XScuGic* ptr_scugic, XGpioPs* ptr_gpio_ps,  XGpioP
 		}
 
 
-    XGpioPs_SetCallbackHandler((XGpioPs*) ptr_gpio_ps, (void *) ptr_gpio_ps, FuncPointer);
+    //XGpioPs_SetCallbackHandler((XGpioPs*) ptr_gpio_ps, (void *) ptr_gpio_ps, FuncPointer);
 
 	//st_mod
 	//XGpioPs_IntrEnablePin(ptr_gpio_ps, 54+63);
 	//XGpioPs_SetIntrTypePin(ptr_gpio_ps, 54+63, XGPIOPS_IRQ_TYPE_EDGE_RISING);
 
 		//rx_pkt_int
-	XGpioPs_SetIntrTypePin(ptr_gpio_ps, 54+61, XGPIOPS_IRQ_TYPE_EDGE_RISING);
-	XGpioPs_IntrEnablePin(ptr_gpio_ps, 54+61);
+	//XGpioPs_SetIntrTypePin(ptr_gpio_ps, 54+61, XGPIOPS_IRQ_TYPE_EDGE_RISING);
+	//XGpioPs_IntrEnablePin(ptr_gpio_ps, 54+61);
 
 
 	//tx_cntrl_int

@@ -554,6 +554,10 @@ static int32_t spi_engine_transfer_message(struct no_os_spi_desc *desc,
 	bool 			offload_en;
 	struct spi_engine_desc	*desc_extra;
 
+
+	//xil_printf("NEW \n\r");
+
+
 	desc_extra = desc->extra;
 
 	spi_engine_compile_message(desc, msg);
@@ -561,10 +565,14 @@ static int32_t spi_engine_transfer_message(struct no_os_spi_desc *desc,
 	offload_en = (desc_extra->offload_config & OFFLOAD_TX_EN) |
 		     (desc_extra->offload_config & OFFLOAD_RX_EN);
 
+
 	/* Write the command fifo buffer */
 	while (msg->cmds != NULL) {
 		spi_engine_queue_get_cmd(&msg->cmds, &data);
 		spi_engine_write_cmd(desc, data);
+
+		//xil_printf("cmd %04X \n\r",data);
+
 	}
 
 	/* Write a number of tx_length WORDS on the SDO line */
@@ -726,6 +734,8 @@ int32_t spi_engine_write_and_read(struct no_os_spi_desc *desc,
 
 	spi_engine_queue_add_cmd(&msg.cmds, CS_HIGH);
 
+    //spi_engine_queue_add_cmd(&msg.cmds, SPI_ENGINE_CMD_SYNC(0));
+
 	/* Pack the bytes into engine WORDS */
 	for (i = 0; i < bytes_number; i++)
 		msg.tx_buf[i / word_len] |= data[i] << (desc_extra->data_width -
@@ -741,6 +751,14 @@ int32_t spi_engine_write_and_read(struct no_os_spi_desc *desc,
 	spi_engine_queue_no_os_free(&msg.cmds);
 	no_os_free(msg.tx_buf);
 	no_os_free(msg.rx_buf);
+
+
+
+
+
+
+
+
 
 	return ret;
 }

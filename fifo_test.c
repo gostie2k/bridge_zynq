@@ -1,21 +1,21 @@
 // ============================================================
-// Test debug: write to FIFO on a char from UART
+// Тестовая отладка записи в FIFO по символу из UART
 // ============================================================
 //
-// Insert fifo_debug_uart_test(&Uart1_Ps) into the main loop
-// BEFORE uart_cmd_chan, to grab the char first.
+// Вставить вызов fifo_debug_uart_test(&Uart1_Ps) в main loop
+// ПЕРЕД uart_cmd_chan, чтобы перехватить символ первым.
 //
-// Commands:
-//   'w' - write a test block (TEST_BLOCK_SIZE bytes, padding=0x00)
-//   'W' - same, padding=0xEE: compare RS parity with 'w' to check TKEEP
-//   'r' - print FIFO status (vacancy, occupancy, tready)
-//   'x' - reset FIFO (XLlFifo_Reset)
-//   'l' - toggle software loopback (TX -> RX without FPGA)
-//   't' - send a test Ethernet frame via radio_linkoutput
-//   's' - stress write: 174 blocks x 188 bytes into TX FIFO (non-blocking)
-//   'S' - stress read: read back and verify (press after 's' when PL ready)
+// Команды:
+//   'w' — записать тестовый блок (TEST_BLOCK_SIZE байт, padding=0x00)
+//   'W' — то же, но padding=0xEE: сравни RS-паритет с 'w' для проверки TKEEP
+//   'r' — напечатать статус FIFO (vacancy, occupancy, tready)
+//   'x' — сброс FIFO (XLlFifo_Reset)
+//   'l' — переключить software loopback (TX -> RX без FPGA)
+//   't' — отправить тестовый Ethernet-фрейм через radio_linkoutput
+//   's' — стресс-тест запись: 174 блока × 188 байт в TX FIFO (не блокирует)
+//   'S' — стресс-тест чтение: вычитать и проверить (жать после 's' когда PL готов)
 //
-// All other chars are passed on to uart_cmd_chan.
+// Все остальные символы пропускаются дальше в uart_cmd_chan.
 
 #include "xllfifo.h"
 #include "xuartps.h"
@@ -24,7 +24,7 @@
 
 extern XLlFifo fifo;
 
-#define TEST_BLOCK_SIZE 188  // Block size = PL_BLOCK_SIZE
+#define TEST_BLOCK_SIZE 188  // Размер блока = PL_BLOCK_SIZE
 
 static u32 test_write_cnt = 0;
 
@@ -37,7 +37,7 @@ void fifo_debug_uart_test(XUartPs *uart_ptr)
                                  XUARTPS_FIFO_OFFSET);
 
     if (ch == 'w') {
-        // --- Write a test block to FIFO ---
+        // --- Записать тестовый блок в FIFO ---
         u32 vacancy = XLlFifo_iTxVacancy(&fifo);
 
         xil_printf("[FIFO_TEST] Vacancy before write: %u words\r\n", vacancy);
@@ -48,15 +48,15 @@ void fifo_debug_uart_test(XUartPs *uart_ptr)
             return;
         }
 
-        // Exactly TEST_BLOCK_SIZE bytes - no padding
+        // Ровно TEST_BLOCK_SIZE байт — без padding
         uint8_t block[TEST_BLOCK_SIZE];
         block[0] = (uint8_t)(test_write_cnt & 0xFF);  // seq
         for (int i = 1; i < TEST_BLOCK_SIZE; i++) {
             block[i] = (uint8_t)(i & 0xFF);
         }
 
-        // Write whole words; the last word may be partial -
-        // XLlFifo_iTxSetLen tells the encoder the exact byte count
+        // Записываем целые слова; последнее слово может быть неполным —
+        // XLlFifo_iTxSetLen укажет энкодеру точное число байт
         u32 word;
         u32 words = (TEST_BLOCK_SIZE + 3) / 4;
         for (u32 i = 0; i < words; i++) {
@@ -76,10 +76,10 @@ void fifo_debug_uart_test(XUartPs *uart_ptr)
                    test_write_cnt, vacancy_after);
 
     } else if (ch == 'W') {
-        // --- Write a block with 0xEE in padding bytes of the last word ---
-        // Used to check TKEEP: if RS parity matches 'w',
-        // the encoder ignores the extra bytes (TKEEP works).
-        // If parity differs - encoder processes 188 bytes instead of TEST_BLOCK_SIZE.
+        // --- Записать блок с 0xEE в padding-байтах последнего слова ---
+        // Используется для проверки TKEEP: если RS-паритет совпадает с 'w',
+        // значит энкодер игнорирует лишние байты (TKEEP работает).
+        // Если паритет отличается — энкодер обрабатывает 188 байт вместо TEST_BLOCK_SIZE.
         u32 vacancy = XLlFifo_iTxVacancy(&fifo);
         xil_printf("[FIFO_TEST] [W] Vacancy before write: %u words\r\n", vacancy);
         if (vacancy < ((TEST_BLOCK_SIZE + 3) / 4)) {
@@ -96,7 +96,7 @@ void fifo_debug_uart_test(XUartPs *uart_ptr)
         for (u32 i = 0; i < words; i++) {
             u32 base = i * 4;
             word  =  (u32)(block[base]);
-            // Fill padding bytes with 0xEE (not 0x00)
+            // Padding байты заполняем 0xEE (а не 0x00)
             word |= (base+1 < (u32)TEST_BLOCK_SIZE) ? ((u32)block[base+1] <<  8) : (0xEEu <<  8);
             word |= (base+2 < (u32)TEST_BLOCK_SIZE) ? ((u32)block[base+2] << 16) : (0xEEu << 16);
             word |= (base+3 < (u32)TEST_BLOCK_SIZE) ? ((u32)block[base+3] << 24) : (0xEEu << 24);
@@ -108,13 +108,13 @@ void fifo_debug_uart_test(XUartPs *uart_ptr)
                    test_write_cnt);
 
     } else if (ch == 's') {
-        // --- Stress test: write 174 blocks of 188 bytes ---
-        // Write is non-blocking. After - press 'r' while RX Occupancy grows,
-        // then 'S' to read and verify.
+        // --- Стресс-тест: записать 174 блока по 188 байт ---
+        // Запись не блокирует. После — жми 'r' пока RX Occupancy растёт,
+        // затем 'S' для чтения и проверки.
         xil_printf("[STRESS] Start: 174 blocks x 188 bytes\r\n");
 
-        // Reset FIFO before the test - otherwise RX may hold
-        // leftovers from a previous run and the seq check gives false errors
+        // Сбросить FIFO перед тестом — иначе в RX могут лежать
+        // остатки от предыдущего запуска и проверка seq даст ложные ошибки
         XLlFifo_IntClear(&fifo, 0xFFFFFFFF);
         XLlFifo_Reset(&fifo);
         xil_printf("[STRESS] FIFO reset done.\r\n");
@@ -142,7 +142,7 @@ void fifo_debug_uart_test(XUartPs *uart_ptr)
         xil_printf("[STRESS] Press 'S' when PL done (check 'r').\r\n");
 
     } else if (ch == 'S') {
-        // --- Read back and verify stress-test results ---
+        // --- Вычитать и проверить результаты стресс-теста ---
         xil_printf("[STRESS] Reading back...\r\n");
         xil_printf("[STRESS] RX Occupancy: %u words\r\n", XLlFifo_iRxOccupancy(&fifo));
         int sread_ok = 0, sread_err = 0, sparity = 0, sblk = 0;
@@ -185,7 +185,7 @@ void fifo_debug_uart_test(XUartPs *uart_ptr)
         xil_printf("  %s\r\n", sread_err == 0 ? "PASS" : "FAIL");
 
         } else if (ch == 'r') {
-        // --- FIFO status ---
+        // --- Статус FIFO ---
         u32 vacancy   = XLlFifo_iTxVacancy(&fifo);
         u32 occupancy = XLlFifo_iRxOccupancy(&fifo);
         u32 isr       = XLlFifo_IntPending(&fifo);
@@ -196,14 +196,14 @@ void fifo_debug_uart_test(XUartPs *uart_ptr)
         xil_printf("  ISR pending : 0x%08X\r\n", isr);
         xil_printf("  Writes done : %u\r\n", test_write_cnt);
 
-        // Check: if vacancy does not change between writes -
-        // the PL side (temp_0) is not reading data
+        // Проверка: если vacancy не меняется между записями —
+        // значит PL-сторона (temp_0) не читает данные
         if (vacancy == 0) {
-            xil_printf("  >>> FIFO STUCK: PL not reading (tready=0)!\r\n");
+            xil_printf("  >>> FIFO STUCK: PL не читает (tready=0)!\r\n");
         }
 
     } else if (ch == 'x') {
-        // --- FIFO reset ---
+        // --- Сброс FIFO ---
         XLlFifo_IntClear(&fifo, 0xFFFFFFFF);
         XLlFifo_Reset(&fifo);
         test_write_cnt = 0;
@@ -211,14 +211,14 @@ void fifo_debug_uart_test(XUartPs *uart_ptr)
 
 
     } else if (ch == 'c') {
-        // --- Reset radio_stream stats and state ---
+        // --- Сброс статистики и состояния radio_stream ---
         radio_stream_reset_stats();
         XLlFifo_IntClear(&fifo, 0xFFFFFFFF);
         XLlFifo_Reset(&fifo);
         xil_printf("[FIFO_TEST] Stats cleared, FIFO reset.\r\n");
 
     } else if (ch == 'p') {
-        // --- Read one block from RX FIFO, full dump ---
+        // --- Вычитать один блок из RX FIFO, полный дамп ---
         u32 occupancy = XLlFifo_iRxOccupancy(&fifo);
         xil_printf("[FIFO_TEST] RX Occupancy: %u words\r\n", occupancy);
         if (occupancy == 0) {
@@ -251,7 +251,7 @@ void fifo_debug_uart_test(XUartPs *uart_ptr)
             for (u32 i = rem; i < 16; i++) xil_printf("   ");
             xil_printf("  | %u-%u\r\n", pkt_len - rem, pkt_len - 1);
         }
-        // Pattern check: data up to TEST_BLOCK_SIZE, padding = 0x00
+        // Проверка паттерна: данные до TEST_BLOCK_SIZE, padding = 0x00
         int errors = 0;
         for (u32 i = 1; i < 188 && i < pkt_len; i++) {
             uint8_t expected = (i < (u32)TEST_BLOCK_SIZE) ? (uint8_t)(i & 0xFF) : 0x00;
@@ -262,12 +262,12 @@ void fifo_debug_uart_test(XUartPs *uart_ptr)
                    rx_block[0], errors, extra);
 
     } else {
-        // so just ignore it. If you need to keep
-        // compatibility with uart_cmd_chan, see comments below.
-        // Option: check the char BEFORE reading from UART,
-        // but XUartPs does not support peek.
+        // поэтому просто игнорируем. Если нужно сохранить
+        // совместимость с uart_cmd_chan, см. комментарии ниже.
+        // Вариант: проверять символ ДО чтения из UART,
+        // но XUartPs не поддерживает peek.
         //
-        // Working option: temporarily disable uart_cmd_chan
-        // during testing.
+        // Рабочий вариант: временно отключить uart_cmd_chan
+        // на время тестирования.
     }
 }

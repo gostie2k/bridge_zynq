@@ -78,6 +78,53 @@ typedef enum {
 
 
 
+
+
+
+
+
+
+
+#define BUF_DEB_CHAN_RX_DEPTH 128
+
+
+#pragma pack(push,1)
+struct deb_chan_rx
+{
+	uint8_t    cnan_id;
+	uint8_t    cnt_seg;
+	uint8_t    ad9361_gain;
+	uint32_t   mer;
+	//uint32_t  freq;
+	//uint16_t  agc_gain;
+	uint32_t   del_ack;
+	//uint8_t   id_pofile;
+	uint8_t    ad9361_rssi;
+	union
+	   {
+		  uint32_t word;
+		  struct
+		   {
+		     //from bit#0....down to bit#7
+			  uint32_t rs_dec_bit_err_10:8;
+			  uint32_t rs_dec_bit_err_01:8;
+			  uint32_t rs_dec_err_cnt:5;
+			  uint32_t rs_dec_err_found:1;
+			  uint32_t rs_dec_fail:1;
+			  uint32_t reserve:9;
+		    } inside;
+	   }      rs_dec_stat;
+
+	 uint16_t vit_err_cnt;
+
+};
+#pragma pack(pop)
+
+
+
+
+
+
 #pragma pack(push,1)
 struct stat_cntrl_tx
 {
@@ -237,7 +284,8 @@ struct ppos_rx
           uint16_t rcos_filt_on:1;
           uint16_t freq_shift_on:1;
           uint16_t run:1;
-          uint16_t reserve: 4;
+          uint16_t deb_append_ena:1;
+          uint16_t reserve:3;
           uint16_t pkt_len;
 	    } inside;
 	} creg0;
@@ -363,13 +411,14 @@ struct ppos_par
 	  uint32_t word;
 	  struct
 	   {
+		  uint32_t ad9361_spi_typ:1; // 1- spi_engine, 0 - ~spi_engine
 	     //from bit#0....down to bit#31
-		 uint32_t imit_ps_int_gpio_63:1;
-		 uint32_t imit_ps_int_gpio_62:1;
-		 uint32_t mfunc_start:1;
-		 uint32_t test_gen_set_fc:1;
-		 uint32_t set_dac_ltc2630:1;
-		 uint32_t reserve:27;
+		 //uint32_t imit_ps_int_gpio_63:1;
+		 //uint32_t imit_ps_int_gpio_62:1;
+		 //uint32_t mfunc_start:1;
+		 //uint32_t test_gen_set_fc:1;
+		 //uint32_t set_dac_ltc2630:1;
+		 uint32_t reserve:31;
 	    } inside;
 	} creg1;
 
@@ -572,9 +621,9 @@ void modem_init();
 
 /**
  * @struct peleng
- * @brief Pulse signal (peleng) parameters. Written over AXI to
+ * @brief Параметры импульсного сигнала (пеленг). Пишутся по AXI в
  *        AXI_CNTRL_REG1_BASEADDR + PELENG_PAR_OFFSET.
- *        Control: UDP 0xA0 group=4.
+ *        Управление: UDP 0xA0 group=4.
  */
 #pragma pack(push, 1)
 struct peleng {

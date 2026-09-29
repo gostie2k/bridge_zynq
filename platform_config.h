@@ -26,19 +26,19 @@
 
 //#define IS_BORT 1
 
-#define IS_MASTER 1
+//#define IS_MASTER 1
 //#define IS_OLD_PAR 1
-//#define IS_SLAVE 1
+#define IS_SLAVE 1
 
 #define IS_ANTSDR
 //#define IS_MAKET_PKRV
 //#define IS_ZED_BOARD
 
-/* Unique device ID (role-independent). Set manually on each modem before
- * flashing: 1st modem=1, 2nd=2, etc. Used for addressed broadcast commands
- * (0xA0 group=5) and embedded in every 188-byte radio segment. */
+/* Уникальный ID устройства (НЕ зависит от роли). Задаётся вручную на КАЖДОМ
+ * модеме перед прошивкой: 1-й модем=1, 2-й=2, и т.д. Используется для адресных
+ * broadcast-команд (0xA0 group=5) и кладётся в каждый 188-байтный радио-сегмент. */
 #ifndef DEVICE_ID_DEFAULT
-#define DEVICE_ID_DEFAULT  11
+#define DEVICE_ID_DEFAULT  2
 #endif
 
 #define RX_CORE_BASEADDR XPAR_PPOS_DSP_0_S01_AXI_BASEADDR
@@ -49,7 +49,7 @@
 
 
 #define AXI_CNTRL_REG_BASEADDR  XPAR_PPOS_DSP_0_S00_AXI_BASEADDR
-/* Peleng: separate AXI slave for the pulse signal */
+/* Пеленг (правки коллеги): отдельный AXI-слейв под импульсный сигнал */
 #define AXI_CNTRL_REG1_BASEADDR  XPAR_PPOS_DSP_0_S04_AXI_BASEADDR
 #define SPI_ENGINE_AD9361_BASEADDR  XPAR_PPOS_DSP_0_S02_AXI_BASEADDR
 #define SPI_ENGINE_NPU_BASEADDR  XPAR_PPOS_DSP_0_S03_AXI_BASEADDR
@@ -58,10 +58,12 @@
 #define NPU_POW_BOARD_CS 1
 
 
+#define RX_CHAN0_DEB_W 5
+
 /* ===================================================================
- *  Firmware version / role + WDT default (WDT-stability merge)
+ *  Firmware version / role + WDT default (мерж WDT-стабильности)
  * =================================================================== */
-#define FW_VERSION   "PRIOR_TEST_1_FIFO"
+#define FW_VERSION   "ASYM-14-1"   /* слейв 14 сегментов за слот, мастер 1 */
 
 #if defined(IS_MASTER) && !defined(IS_SLAVE)
   #define FW_ROLE_STR "MASTER"
@@ -76,7 +78,7 @@
 
 #define FW_BUILD_STR  FW_VERSION " " FW_ROLE_STR " (" __DATE__ " " __TIME__ ")"
 
-/* WDT on by default (1=live). Runtime toggle - UDP 0x90 0x4C. */
+/* WDT включён по умолчанию (1=боевой). Рантайм-тумблер — UDP 0x90 0x4C. */
 #ifndef WDT_ENABLED_DEFAULT
 #define WDT_ENABLED_DEFAULT  0
 #endif

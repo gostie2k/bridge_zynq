@@ -1,6 +1,6 @@
 /**
  * @file firewall.c
- * @brief Firewall implementation for port 3 (radio channel)
+ * @brief Реализация сетевого экрана для порта 3 (радиоканал)
  */
 
 #include "firewall.h"
@@ -11,7 +11,7 @@
 #include "xil_printf.h"
 #include <string.h>
 
-/* Global filter config */
+/* Глобальная конфигурация фильтра */
 static firewall_config_t fw_cfg;
 
 
@@ -25,7 +25,7 @@ static firewall_config_t fw_cfg;
 
 void firewall_init(void)
 {
-    /* Default: everything allowed, mask 0 - no IP filtering */
+    /* По умолчанию: всё разрешено, маска 0 — не фильтруем по IP */
     fw_cfg.ip_mask  = 0x00000000;
     fw_cfg.arp_en   = 0x01;
     fw_cfg.icmp_en  = 0x01;
@@ -54,31 +54,31 @@ firewall_config_t firewall_get_config(void)
     return fw_cfg;
 }
 
-/* ========== Filtering ========== */
+/* ========== Фильтрация ========== */
 
 /**
- * Filtering logic:
+ * Логика фильтрации:
  *
  * 1. EtherType == 0x0806 (ARP):
- *    -> pass if arp_en == 0x01
+ *    → пропускаем если arp_en == 0x01
  *
  * 2. EtherType == 0x0800 (IPv4):
- *    a) Check destination IP against mask:
+ *    a) Проверяем destination IP по маске:
  *       (dst_ip & mask) == (bridge_ip & mask)
- *       If mask == 0 - check is skipped (pass all).
- *       Broadcast (dst = 255.255.255.255) always passes.
- *    b) Check protocol:
- *       - ICMP (1)  -> icmp_en
- *       - TCP  (6)  -> tcp_en
- *       - UDP  (17) -> udp_en
- *       - other     -> block
+ *       Если mask == 0 — проверка пропускается (пропускаем всё).
+ *       Broadcast (dst = 255.255.255.255) всегда пропускается.
+ *    b) Проверяем протокол:
+ *       - ICMP (1)  → icmp_en
+ *       - TCP  (6)  → tcp_en
+ *       - UDP  (17) → udp_en
+ *       - иное      → блокируем
  *
- * 3. All other EtherTypes -> block
+ * 3. Все остальные EtherType → блокируем
  */
 int firewall_filter(struct pbuf *p, struct netif *bridge_nif)
 {
     if (p == NULL || p->len < sizeof(struct eth_hdr)) {
-    	FW_BLOCK("too short"); /* too short - block */
+    	FW_BLOCK("too short"); /* слишком короткий — блокируем */
     }
 
     struct eth_hdr *ethhdr = (struct eth_hdr *)p->payload;
@@ -87,7 +87,7 @@ int firewall_filter(struct pbuf *p, struct netif *bridge_nif)
     /* --- ARP --- */
     if (eth_type == ETHTYPE_ARP) {
         if (fw_cfg.arp_en != 0x01) FW_BLOCK("ARP disabled");
-        return 1;  // ARP allowed
+        return 1;  // ARP разрешён
     }
 
     /* --- IPv4 --- */

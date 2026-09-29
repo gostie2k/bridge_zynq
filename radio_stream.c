@@ -10,11 +10,16 @@
 #include "lwip/prot/ethernet.h"
 #include "lwip/prot/ip4.h"
 
+/* Отладочный канал приёма — из новой платформы. */
+struct deb_chan_rx buf_deb_chan_rx[BUF_DEB_CHAN_RX_DEPTH];
+uint32_t buf_deb_chan_rx_wad = 0;
+uint32_t buf_deb_chan_rx_rad = 0;
+
 extern struct netif port3_bridge;
 
-#define PL_BLOCK_SIZE 188       // FPGA block size
-#define BLOCK_HEADER_SIZE 3   /* [0]=seq, [1..2]=source device_id */
-#define BLOCK_PAYLOAD_SIZE (PL_BLOCK_SIZE - BLOCK_HEADER_SIZE) // 187 data bytes
+#define PL_BLOCK_SIZE 188       // Р Р°Р·РјРµСЂ Р±Р»РѕРєР° РґР»СЏ FPGA
+#define BLOCK_HEADER_SIZE 3   /* [0]=seq, [1..2]=device_id источника */ //    // 1 Р±Р°Р№С‚ РЅР° СЃС‡РµС‚С‡РёРє СЃРµРіРјРµРЅС‚РѕРІ
+#define BLOCK_PAYLOAD_SIZE (PL_BLOCK_SIZE - BLOCK_HEADER_SIZE) // 187 Р±Р°Р№С‚ РґР°РЅРЅС‹С…
 
 #define MAGIC_H 0xFA
 #define MAGIC_L 0xCE
@@ -117,7 +122,7 @@ static int classify(struct pbuf *p)
     return STREAM_DATA;
 }
 
-static int  loopback_enabled = 0;  // 0 = real FPGA, 1 = software loopback
+static int  loopback_enabled = 0;  // 0 = СЂРµР°Р»СЊРЅС‹Р№ FPGA, 1 = РїСЂРѕРіСЂР°РјРјРЅС‹Р№ loopback
 
 
 #define PL_RX_WORDS  47
@@ -134,11 +139,11 @@ uint16_t cnt_tx_seg=0;
 static u32 dbg_tx_blocks = 0;
 static u32 dbg_rx_blocks = 0;
 static u32 dbg_rx_pkts = 0;
-static u32 dbg_err_seq_gap = 0;   // segment losses (radio)
-static u32 dbg_err_crc = 0;       // CRC errors
-static u32 dbg_err_fifo_full = 0; // FIFO full - block dropped
-static u32 dbg_err_rx_overflow = 0; // rx_ring overflow
-static u32 dbg_err_pkt_gap = 0;   // packet ID gaps on RX
+static u32 dbg_err_seq_gap = 0;   // РџРѕС‚РµСЂРё СЃРµРіРјРµРЅС‚РѕРІ (СЂР°РґРёРѕ)
+static u32 dbg_err_crc = 0;       // РћС€РёР±РєРё CRC
+static u32 dbg_err_fifo_full = 0; // FIFO РїРѕР»РѕРЅ вЂ” Р±Р»РѕРє РґСЂРѕРїРЅСѓС‚
+static u32 dbg_err_rx_overflow = 0; // rx_ring РїРµСЂРµРїРѕР»РЅРµРЅ
+static u32 dbg_err_pkt_gap = 0;   // РџСЂРѕРїСѓСЃРєРё packet ID РЅР° RX
 
 static int crc_dump_done = 0;     // flag for one-shot CRC-error dump
 static u32 dbg_err_tx_stall = 0;  // tx_process aborted (TX FIFO full)
@@ -146,7 +151,7 @@ static u32 dbg_err_tx_stall = 0;  // tx_process aborted (TX FIFO full)
 /* TX FIFO depth, learned once at init (build-time IP parameter). */
 static u32 g_fifo_tx_depth  = 0;
 
-// RX parser
+// RX РџР°СЂСЃРµСЂ
 typedef enum {
     ST_MAGIC_H, ST_MAGIC_L,
     ST_ID_H,    ST_ID_L,
@@ -185,7 +190,7 @@ static uint16_t rx_last_src_id = 0;   /* source device_id from block header */
 
 
 
-// --- CRC32 (table-based, ~4x faster than byte-wise) ---
+// --- CRC32 (табличный, ~4x быстрее побайтового) ---
 static const uint32_t crc32_table[256] = {
     0x00000000, 0x77073096, 0xEE0E612C, 0x990951BA, 0x076DC419, 0x706AF48F, 0xE963A535, 0x9E6495A3,
     0x0EDB8832, 0x79DCB8A4, 0xE0D5E91E, 0x97D2D988, 0x09B64C2B, 0x7EB17CBD, 0xE7B82D07, 0x90BF1D91,
@@ -222,12 +227,12 @@ static const uint32_t crc32_table[256] = {
 };
 
 
-// Byte-wise CRC (for RX parser - one byte at a time)
+// Побайтовый CRC (для RX парсера — обрабатывает по одному байту)
 static inline uint32_t calc_crc32_byte(uint32_t crc, uint8_t data) {
     return (crc >> 8) ^ crc32_table[(crc ^ data) & 0xFF];
 }
 
-// Block CRC (for TX - whole buffer at once)
+// Блочный CRC (для TX — считает весь буфер за раз)
 static uint32_t calc_crc32_block(const uint8_t *data, uint32_t len, uint32_t crc) {
     for (uint32_t i = 0; i < len; i++)
         crc = (crc >> 8) ^ crc32_table[(crc ^ data[i]) & 0xFF];
@@ -235,12 +240,12 @@ static uint32_t calc_crc32_block(const uint8_t *data, uint32_t len, uint32_t crc
 }
 
 
-// Forward declaration (defined below)
+// Forward declaration (РѕРїСЂРµРґРµР»РµРЅРёРµ РЅРёР¶Рµ)
 void radio_input_block(uint8_t *block_188, struct netif *inp_netif);
 
 // =========================================================
-// Read all ready blocks from RX FIFO (after encoder)
-// Called from main loop and from send_block_to_pl
+// Р§С‚РµРЅРёРµ РІСЃРµС… РіРѕС‚РѕРІС‹С… Р±Р»РѕРєРѕРІ РёР· RX FIFO (РїРѕСЃР»Рµ СЌРЅРєРѕРґРµСЂР°)
+// Р’С‹Р·С‹РІР°РµС‚СЃСЏ РёР· main loop Рё РёР· send_block_to_pl
 // =========================================================
 void drain_rx_fifo(void) {
 
@@ -252,7 +257,9 @@ void drain_rx_fifo(void) {
 		u32 ReceiveLength = (XLlFifo_iRxGetLen(&fifo))/4;
 
 
-if (ReceiveLength==54)
+/*
+
+if ((ReceiveLength==54)||(ReceiveLength==54 + RX_CHAN0_DEB_W ))
 			{
 
 				RxWord = XLlFifo_RxGetWord(&fifo);
@@ -274,7 +281,7 @@ if (ReceiveLength==54)
 				uint16_t check = cnt_seg_in;
 				uint16_t check_rx;
 
-				for (int i=2; i < ReceiveLength; i++) {
+				for (int i=2; i < 54; i++) {
 								RxWord = XLlFifo_RxGetWord(&fifo);
 
 								memcpy((u32*) &fifo_buf[0] + i, &RxWord, 4);
@@ -288,6 +295,32 @@ if (ReceiveLength==54)
 								if (i == 3+PL_RX_WORDS) check_rx = RxWord;
 
 							}
+
+				if( ReceiveLength==54 + RX_CHAN0_DEB_W )
+				{
+
+					RxWord = XLlFifo_RxGetWord(&fifo);
+
+					buf_deb_chan_rx[buf_deb_chan_rx_wad].mer = RxWord;
+
+					RxWord = XLlFifo_RxGetWord(&fifo);
+
+					buf_deb_chan_rx[buf_deb_chan_rx_wad].agc_gain = RxWord&0x0000ffff;
+
+					buf_deb_chan_rx[buf_deb_chan_rx_wad].ad9361_gain = (RxWord>>24)&0x000000ff;
+					buf_deb_chan_rx[buf_deb_chan_rx_wad].ad9361_rssi = (RxWord>>16)&0x000000ff;
+
+
+					buf_deb_chan_rx_wad++;
+
+                    if (buf_deb_chan_rx_wad == BUF_DEB_CHAN_RX_DEPTH) buf_deb_chan_rx_wad = 0;
+
+				}
+
+
+
+
+
 
 
 						if (!is_val)
@@ -321,6 +354,84 @@ if (ReceiveLength==54)
 			}
 
 
+*/
+
+
+if (ReceiveLength==47 + RX_CHAN0_DEB_W)
+			{
+
+				uint8_t fifo_buf[PL_RX_BYTES+RX_CHAN0_DEB_W*4];
+
+				for (int i=0; i < 47; i++) {
+
+								RxWord = XLlFifo_RxGetWord(&fifo);
+								memcpy((u32*) &fifo_buf[0] + i, &RxWord, 4);
+
+				}
+
+
+				buf_deb_chan_rx[buf_deb_chan_rx_wad].cnan_id = 0;
+
+				buf_deb_chan_rx[buf_deb_chan_rx_wad].cnt_seg = fifo_buf[0];
+
+				u32 ap_dat0 = XLlFifo_RxGetWord(&fifo);
+
+				buf_deb_chan_rx[buf_deb_chan_rx_wad].mer = ap_dat0;
+
+				u32 ap_dat1 = XLlFifo_RxGetWord(&fifo);
+
+
+				buf_deb_chan_rx[buf_deb_chan_rx_wad].ad9361_gain = (ap_dat1>>8)&0x000000ff;
+				buf_deb_chan_rx[buf_deb_chan_rx_wad].ad9361_rssi = (ap_dat1>>0)&0x000000ff;
+
+
+				u32 ap_dat2 = XLlFifo_RxGetWord(&fifo);
+
+
+				buf_deb_chan_rx[buf_deb_chan_rx_wad].rs_dec_stat.inside.rs_dec_bit_err_10 =  ap_dat2 & 0x000000ff;
+				buf_deb_chan_rx[buf_deb_chan_rx_wad].rs_dec_stat.inside.rs_dec_bit_err_01 = (ap_dat2 >> 8) & 0x000000ff;
+				buf_deb_chan_rx[buf_deb_chan_rx_wad].rs_dec_stat.inside.rs_dec_err_cnt    = (ap_dat2 >> 16) & 0x0000001f;
+				buf_deb_chan_rx[buf_deb_chan_rx_wad].rs_dec_stat.inside.rs_dec_err_found  = (ap_dat2 >> 21) & 0x00000001;
+				buf_deb_chan_rx[buf_deb_chan_rx_wad].rs_dec_stat.inside.rs_dec_fail       = (ap_dat2 >> 22) & 0x00000001;
+
+
+				u32 ap_dat3 = XLlFifo_RxGetWord(&fifo);
+
+
+				buf_deb_chan_rx[buf_deb_chan_rx_wad].vit_err_cnt = ap_dat3 & 0x000007ff;
+
+
+				u32 ap_dat4 = XLlFifo_RxGetWord(&fifo);
+
+				buf_deb_chan_rx[buf_deb_chan_rx_wad].del_ack = ap_dat4;
+
+			    buf_deb_chan_rx_wad++;
+
+				if (buf_deb_chan_rx_wad == BUF_DEB_CHAN_RX_DEPTH) buf_deb_chan_rx_wad = 0;
+
+
+				//printf("ap_dat0 = %08X ap_dat1= %08X ap_dat2 = %08X ap_dat3= %08X\r\n",ap_dat0, ap_dat1,ap_dat2, ap_dat3);
+
+
+ if (buf_deb_chan_rx[buf_deb_chan_rx_wad].rs_dec_stat.inside.rs_dec_fail == 0)
+ {
+        for (int i = 0; i < PL_RX_WORDS*4; i++) {
+        	drain_rx_block[i] = fifo_buf[0+i];
+        }
+
+
+        radio_input_block(drain_rx_block, &port3_bridge);
+ }
+
+
+	return;
+
+			}
+
+
+
+
+
 	else
 		{
 			xil_printf("fifo_rx_len=%d\n\r", ReceiveLength);
@@ -332,7 +443,10 @@ if (ReceiveLength==54)
 }
 
 
-// FPGA send helper (vacancy already checked in tx_process)
+
+
+
+// РҐРµР»РїРµСЂ РѕС‚РїСЂР°РІРєРё РІ FPGA (vacancy СѓР¶Рµ РїСЂРѕРІРµСЂРµРЅР° РІ tx_process)
 static void send_block_to_pl(uint8_t *block) {
 
    struct ppos_tx ppos_tx_par;
@@ -354,9 +468,12 @@ static void send_block_to_pl(uint8_t *block) {
    if (ppos_tx_par.creg0.inside.run == 1) {
 
 
-    if (XLlFifo_iTxVacancy(&fifo) >= ((PL_BLOCK_SIZE+28) / 4) ) {
+    //if (XLlFifo_iTxVacancy(&fifo) >= ((PL_BLOCK_SIZE+28) / 4) ) {
+    if (XLlFifo_iTxVacancy(&fifo) >= ((PL_BLOCK_SIZE+0) / 4) ) {
+
         u32 word;
-        word = 0xb6ce261d;
+
+        /*        word = 0xb6ce261d;
         //word = swap32(word);
         XLlFifo_TxPutWord(&fifo, word);
         word = 0x6d9c0000;
@@ -366,20 +483,31 @@ static void send_block_to_pl(uint8_t *block) {
         XLlFifo_TxPutWord(&fifo, word);
         word = 0x00000000;
         XLlFifo_TxPutWord(&fifo, word);
+*/
 
-        for (int i = 0; i < PL_BLOCK_SIZE; i += 4) {
+        for (u32 i = 0; i < PL_BLOCK_SIZE + 0; i += 4) {
+
+        	if (i < PL_BLOCK_SIZE)
+        	{
+
             word =  (u32)block[i]        | ((u32)block[i+1] << 8) |
                    ((u32)block[i+2] << 16)| ((u32)block[i+3] << 24);
 
+            //word =  i+3   | (i+2) << 8 |
+            //             (i+1) << 16 | (i+0) << 24;
 
-            check+=  (uint16_t)block[i] | ((uint16_t)block[i+1] << 8);
-            check+=  (uint16_t)block[i+2] | ((uint16_t)block[i+3] << 8);
+
+
+        	} else word =0;
+
+            //check+=  (uint16_t)block[i] | ((uint16_t)block[i+1] << 8);
+            //check+=  (uint16_t)block[i+2] | ((uint16_t)block[i+3] << 8);
 
             XLlFifo_TxPutWord(&fifo, word);
         }
 
 
-
+/*
         word = 0x00000000;
         word+=check;
         XLlFifo_TxPutWord(&fifo, word);
@@ -388,8 +516,11 @@ static void send_block_to_pl(uint8_t *block) {
         XLlFifo_TxPutWord(&fifo, word);
         XLlFifo_TxPutWord(&fifo, word);
         XLlFifo_TxPutWord(&fifo, word);
+*/
 
-        u32 byt = PL_BLOCK_SIZE+28;
+
+        //u32 byt = PL_BLOCK_SIZE+28;
+        u32 byt = PL_BLOCK_SIZE+0;
 
         XLlFifo_iTxSetLen(&fifo, byt);
 
@@ -404,7 +535,7 @@ static void send_block_to_pl(uint8_t *block) {
 
 
 // =========================================================
-// TX PART (SEND)
+// Р§РђРЎРўР¬ TX (РћРўРџР РђР’РљРђ)
 // =========================================================
 
 /* Block write into a stream's ring (handles wrap-around). */
@@ -478,8 +609,11 @@ void tx_process() {
             break;                    /* neither stream has a full block */
         }
 
-        /* If TX FIFO full - exit, radio_poll will resend */
-        if (XLlFifo_iTxVacancy(&fifo) < ((PL_BLOCK_SIZE + 28) / 4)) {
+        /* If TX FIFO full - exit, radio_poll will resend.
+         * Новая платформа убрала 28-байтовое обрамление (преамбула, маркер,
+         * контрольная сумма, хвостовые нули закомментированы в
+         * send_block_to_pl), поэтому в FIFO уходит ровно PL_BLOCK_SIZE. */
+        if (XLlFifo_iTxVacancy(&fifo) < ((PL_BLOCK_SIZE + 0) / 4)) {
             dbg_err_tx_stall++;
             break;
         }
@@ -491,9 +625,9 @@ void tx_process() {
 
 err_t radio_linkoutput(struct netif *netif, struct pbuf *p) {
 
-    /* WDT robustness: while packets really flow through the radio path it is
-     * progress, not a hang. Kick WDT (throttled inside) so heavy load does not
-     * cause false reboots. BEFORE the drop check - dropped traffic keeps the timer alive. */
+    /* Робастность WDT: пока пакеты реально текут через radio path — это прогресс,
+     * не hang. Кикаем WDT (троттл внутри), чтобы под нагрузкой не было ложных
+     * ребутов. ДО drop-проверки — поток дропаемых пакетов тоже держит таймер. */
     wdt_section_mark(WDT_SEC_RADIO_TX);
     wdt_progress_kick();
 
@@ -507,7 +641,7 @@ err_t radio_linkoutput(struct netif *netif, struct pbuf *p) {
 
     s->dbg_pkts++;
 
-    // CRC32 over whole packet (block - one table lookup per byte)
+    // CRC32 по всему пакету (блочный — один table lookup на байт)
     uint32_t crc = 0xFFFFFFFF;
     struct pbuf *q;
     for(q = p; q != NULL; q = q->next) {
@@ -515,7 +649,7 @@ err_t radio_linkoutput(struct netif *netif, struct pbuf *p) {
     }
     crc = ~crc;
 
-    // Header (10 bytes) - byte-wise, small overhead
+    // Заголовок (10 байт) — побайтово, мелкий overhead
     uint8_t hdr[6];
     hdr[0] = MAGIC_H;
     hdr[1] = MAGIC_L;
@@ -526,12 +660,12 @@ err_t radio_linkoutput(struct netif *netif, struct pbuf *p) {
     s->pkt_id++;
     tx_push_block(s, hdr, 6);
 
-    // Packet data - block write (memcpy instead of byte-wise)
+    // Данные пакета — блочная запись (memcpy вместо побайтовой)
     for(q = p; q != NULL; q = q->next) {
         tx_push_block(s, (uint8_t*)q->payload, q->len);
     }
 
-    // CRC (4 bytes)
+    // CRC (4 байта)
     uint8_t crc_bytes[4];
     crc_bytes[0] = (crc >> 24) & 0xFF;
     crc_bytes[1] = (crc >> 16) & 0xFF;
@@ -567,7 +701,7 @@ void radio_poll(void) {
 }
 
 // =========================================================
-// RX PART (RECEIVE)
+// Р§РђРЎРўР¬ RX (РџР Р�Р•Рњ)
 // =========================================================
 
 void radio_input_block(uint8_t *block_188, struct netif *inp_netif) {
@@ -708,7 +842,7 @@ void radio_input_block(uint8_t *block_188, struct netif *inp_netif) {
     }
 }
 
-// Print statistics
+// Р’С‹РІРѕРґ СЃС‚Р°С‚РёСЃС‚РёРєРё
 void radio_stream_print_stats(void) {
     xil_printf("TX data: %u Pkt (reject %u)   TX tlm: %u Pkt (reject %u)\r\n",
         tx_str[STREAM_DATA].dbg_pkts, tx_str[STREAM_DATA].dbg_reject,

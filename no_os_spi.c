@@ -6,6 +6,8 @@
 //#include "no_os_mutex.h"
 //#include "no_os_alloc.h"
 
+#include "spi_engine/spi_engine.h"
+extern struct no_os_spi_desc* spi_eng_ad9361;
 
 /*
 *	SPI Comm Helpers
@@ -55,6 +57,9 @@ int32_t no_os_spi_write_and_read(struct no_os_spi_desc *desc,
 //dev_dbg(desc, "%s: reg 0x%"PRIX32" val 0x%X", __func__, num, data[0]);
 //dev_dbg(&spi->dev, "%s: reg 0x%"PRIX32" val 0x%X", __func__, reg, buf[2]);
  //printf('%x',data[2]);
+
+
+  return spi_engine_write_and_read(spi_eng_ad9361, data, bytes_number);
 
 
      for (uint16_t k=0;k<num;k++)
