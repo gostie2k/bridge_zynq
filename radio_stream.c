@@ -148,6 +148,15 @@ static u32 dbg_err_pkt_gap = 0;   // РџСЂРѕРїСѓСЃРєРё packet ID 
 static int crc_dump_done = 0;     // flag for one-shot CRC-error dump
 static u32 dbg_err_tx_stall = 0;  // tx_process aborted (TX FIFO full)
 
+/* ---- Диагностика приёмного тракта (добавлено для разбора «блоки идут,
+ * пакеты не собираются»). Только счётчики, на поведение не влияют. ---- */
+static u32 dbg_rx_len_new    = 0;  /* кадров 47+DEB слов — новый формат      */
+static u32 dbg_rx_len_legacy = 0;  /* кадров 54(+DEB) слов — старый формат   */
+static u32 dbg_rx_len_other  = 0;  /* кадров иной длины — не разобраны       */
+static u32 dbg_rx_len_last   = 0;  /* длина последнего НЕОЖИДАННОГО кадра   */
+static u32 dbg_rx_magic      = 0;  /* сколько раз найдена метка FA CE        */
+static u8  dbg_rx_first16[16];     /* первые 16 байт последнего блока        */
+
 /* TX FIFO depth, learned once at init (build-time IP parameter). */
 static u32 g_fifo_tx_depth  = 0;
 
@@ -259,6 +268,7 @@ void drain_rx_fifo(void) {
 
 /*
 
+if ((ReceiveLength==54)||(ReceiveLength==54 + RX_CHAN0_DEB_W )) { dbg_rx_len_legacy++; }
 if ((ReceiveLength==54)||(ReceiveLength==54 + RX_CHAN0_DEB_W ))
 			{
 
@@ -357,6 +367,7 @@ if ((ReceiveLength==54)||(ReceiveLength==54 + RX_CHAN0_DEB_W ))
 */
 
 
+if (ReceiveLength==47 + RX_CHAN0_DEB_W) { dbg_rx_len_new++; }
 if (ReceiveLength==47 + RX_CHAN0_DEB_W)
 			{
 
@@ -434,6 +445,7 @@ if (ReceiveLength==47 + RX_CHAN0_DEB_W)
 
 	else
 		{
+			dbg_rx_len_other++; dbg_rx_len_last = ReceiveLength;
 			xil_printf("fifo_rx_len=%d\n\r", ReceiveLength);
 			for (int i=0; i < ReceiveLength; i++)  RxWord = XLlFifo_RxGetWord(&fifo);
 		}
@@ -706,6 +718,7 @@ void radio_poll(void) {
 
 void radio_input_block(uint8_t *block_188, struct netif *inp_netif) {
     dbg_rx_blocks++;
+    for (int i = 0; i < 16; i++) dbg_rx_first16[i] = block_188[i];
 
     /* [0] = stream bit (7) + 7-bit per-stream block counter. Demux first:
      * feeding both streams into one parser would splice them together. */
@@ -748,6 +761,7 @@ void radio_input_block(uint8_t *block_188, struct netif *inp_netif) {
                 break;
 
             case ST_MAGIC_L:
+                if (b == MAGIC_L) dbg_rx_magic++;
                 if (b == MAGIC_L) st->state = ST_ID_H;
                 else st->state = ST_MAGIC_H;
                 st->tail = (st->tail + 1) % st->size; st->count--;
@@ -956,6 +970,15 @@ void radio_stream_reset_rx_ids(void) {
 
 void radio_stream_set_loopback(int enable) {    loopback_enabled = enable;
     xil_printf("[RADIO] Loopback %s\r\n", enable ? "ENABLED" : "DISABLED");
+}
+
+void radio_stream_get_rx_diag(uint32_t *out5, uint8_t *first16) {
+    out5[0] = dbg_rx_len_new;
+    out5[1] = dbg_rx_len_legacy;
+    out5[2] = dbg_rx_len_other;
+    out5[3] = dbg_rx_len_last;
+    out5[4] = dbg_rx_magic;
+    for (int i = 0; i < 16; i++) first16[i] = dbg_rx_first16[i];
 }
 
 int radio_stream_get_loopback(void) {

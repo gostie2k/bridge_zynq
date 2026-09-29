@@ -77,4 +77,9 @@ void radio_stream_reset_queue_stats(void);
  * vacancy equals the full depth - the only way to learn it from software. */
 void radio_stream_set_fifo_depth(uint32_t words);
 
+/* Диагностика приёмного тракта: [0]=кадров нового формата, [1]=старого,
+ * [2]=иной длины, [3]=длина последнего неожиданного, [4]=найдено меток FA CE.
+ * first16 — первые 16 байт последнего принятого блока. */
+void radio_stream_get_rx_diag(uint32_t *out5, uint8_t *first16);
+
 #endif /* RADIO_STREAM_H */

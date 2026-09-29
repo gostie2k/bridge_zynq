@@ -579,6 +579,23 @@ static void handle_proto_0x90(struct udp_pcb *upcb, uint8_t *data,
             break;
         }
 
+        case 0x25: { /* Диагностика приёма: счётчики форматов кадров + первые
+                      * 16 байт последнего блока. [2..21]=5 uint32, [22..37]=байты */
+#define RXDIAG_LEN 38
+            struct pbuf *pb = resp_alloc(0x25, RXDIAG_LEN);
+            if (!pb) break;
+            uint8_t *d = (uint8_t *)pb->payload;
+            memset(d + 2, 0, RXDIAG_LEN - 2);
+            uint32_t v[5];
+            uint8_t  f16[16];
+            radio_stream_get_rx_diag(v, f16);
+            for (int i = 0; i < 5; i++) put_le32(d + 2 + i * 4, v[i]);
+            memcpy(d + 22, f16, 16);
+            resp_send(upcb, pb, addr, port);
+#undef RXDIAG_LEN
+            break;
+        }
+
         case 0x24: { /* Reset the queue counters and the peak before a run. */
             radio_stream_reset_queue_stats();
             struct pbuf *pb = resp_alloc(0x24, 2);
