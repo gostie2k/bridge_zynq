@@ -69,13 +69,18 @@ typedef struct {
     uint32_t tlm_count_max;
     uint32_t tlm_pkts;
     uint32_t tlm_reject;
+    /* Аппаратная очередь телеметрии (MM_S_0). Именно её глубина задаёт дно
+     * по задержке телеметрии — поля выше описывают очередь данных (MM_S_2). */
+    uint32_t tlm_fifo_vacancy;
+    uint32_t tlm_fifo_depth;
 } radio_queue_stats_t;
 
 void radio_stream_get_queue_stats(radio_queue_stats_t *out);
 void radio_stream_reset_queue_stats(void);
 /* Called once from init_tx_rx_fifo(): right after XLlFifo_Reset() the TX
  * vacancy equals the full depth - the only way to learn it from software. */
-void radio_stream_set_fifo_depth(uint32_t words);
+void radio_stream_set_fifo_depth(uint32_t words);       /* FIFO телеметрии */
+void radio_stream_set_fifo_depth_data(uint32_t words);  /* FIFO данных     */
 
 /* Диагностика приёмного тракта: [0]=кадров нового формата, [1]=старого,
  * [2]=иной длины, [3]=длина последнего неожиданного, [4]=найдено меток FA CE.

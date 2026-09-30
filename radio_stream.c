@@ -70,7 +70,8 @@ extern struct netif port3_bridge;
  * under strict priority it should stay nearly empty. 8 KB holds ~5 full frames. */
 #define TLM_RING_SIZE (8 * 1024)
 
-extern XLlFifo fifo;
+extern XLlFifo fifo;          /* MM_S_0: приём всего + передача телеметрии */
+extern XLlFifo fifo_npr_tx;   /* MM_S_2: передача данных                   */
 
 typedef struct {
     uint8_t  *ring;
@@ -158,7 +159,8 @@ static u32 dbg_rx_magic      = 0;  /* сколько раз найдена ме�
 static u8  dbg_rx_first16[16];     /* первые 16 байт последнего блока        */
 
 /* TX FIFO depth, learned once at init (build-time IP parameter). */
-static u32 g_fifo_tx_depth  = 0;
+static u32 g_fifo_tx_depth  = 0;   /* FIFO телеметрии (MM_S_0) */
+static u32 g_fifo_data_depth = 0;  /* FIFO данных     (MM_S_2) */
 
 // RX РџР°СЂСЃРµСЂ
 typedef enum {
@@ -459,7 +461,7 @@ if (ReceiveLength==47 + RX_CHAN0_DEB_W)
 
 
 // РҐРµР»РїРµСЂ РѕС‚РїСЂР°РІРєРё РІ FPGA (vacancy СѓР¶Рµ РїСЂРѕРІРµСЂРµРЅР° РІ tx_process)
-static void send_block_to_pl(uint8_t *block) {
+static void send_block_to_pl(uint8_t *block, XLlFifo *f) {
 
    struct ppos_tx ppos_tx_par;
    ppos_tx_par.creg0.word = AXI_CNTRL_REG_READ(AXI_CNTRL_REG_BASEADDR + TX_CHAN0_PAR_OFFSET, 0);
@@ -468,8 +470,8 @@ static void send_block_to_pl(uint8_t *block) {
    if (ppos_tx_par.creg0.inside.run == 0) //write pars
    {
 
-       XLlFifo_IntClear(&fifo, 0xFFFFFFFF);
-       XLlFifo_Reset(&fifo);
+       XLlFifo_IntClear(f, 0xFFFFFFFF);
+       XLlFifo_Reset(f);
        ppos_tx_par.creg0.inside.run = 1;
        AXI_CNTRL_REG_WRITE(AXI_CNTRL_REG_BASEADDR + TX_CHAN0_PAR_OFFSET, 0, ppos_tx_par.creg0.word);
        return;
@@ -480,21 +482,21 @@ static void send_block_to_pl(uint8_t *block) {
    if (ppos_tx_par.creg0.inside.run == 1) {
 
 
-    //if (XLlFifo_iTxVacancy(&fifo) >= ((PL_BLOCK_SIZE+28) / 4) ) {
-    if (XLlFifo_iTxVacancy(&fifo) >= ((PL_BLOCK_SIZE+0) / 4) ) {
+    //if (XLlFifo_iTxVacancy(f) >= ((PL_BLOCK_SIZE+28) / 4) ) {
+    if (XLlFifo_iTxVacancy(f) >= ((PL_BLOCK_SIZE+0) / 4) ) {
 
         u32 word;
 
         /*        word = 0xb6ce261d;
         //word = swap32(word);
-        XLlFifo_TxPutWord(&fifo, word);
+        XLlFifo_TxPutWord(f, word);
         word = 0x6d9c0000;
         word+=cnt_tx_seg;
         uint16_t check=cnt_tx_seg;
         cnt_tx_seg++;
-        XLlFifo_TxPutWord(&fifo, word);
+        XLlFifo_TxPutWord(f, word);
         word = 0x00000000;
-        XLlFifo_TxPutWord(&fifo, word);
+        XLlFifo_TxPutWord(f, word);
 */
 
         for (u32 i = 0; i < PL_BLOCK_SIZE + 0; i += 4) {
@@ -515,26 +517,26 @@ static void send_block_to_pl(uint8_t *block) {
             //check+=  (uint16_t)block[i] | ((uint16_t)block[i+1] << 8);
             //check+=  (uint16_t)block[i+2] | ((uint16_t)block[i+3] << 8);
 
-            XLlFifo_TxPutWord(&fifo, word);
+            XLlFifo_TxPutWord(f, word);
         }
 
 
 /*
         word = 0x00000000;
         word+=check;
-        XLlFifo_TxPutWord(&fifo, word);
+        XLlFifo_TxPutWord(f, word);
 
         word = 0x00000000;
-        XLlFifo_TxPutWord(&fifo, word);
-        XLlFifo_TxPutWord(&fifo, word);
-        XLlFifo_TxPutWord(&fifo, word);
+        XLlFifo_TxPutWord(f, word);
+        XLlFifo_TxPutWord(f, word);
+        XLlFifo_TxPutWord(f, word);
 */
 
 
         //u32 byt = PL_BLOCK_SIZE+28;
         u32 byt = PL_BLOCK_SIZE+0;
 
-        XLlFifo_iTxSetLen(&fifo, byt);
+        XLlFifo_iTxSetLen(f, byt);
 
         dbg_tx_blocks++;
     } else {
@@ -572,7 +574,7 @@ static void tx_push_block(tx_stream_t *s, const uint8_t *src, uint32_t len) {
 }
 
 /* Cut one block off a stream and hand it to the PL. */
-static void tx_emit_block(tx_stream_t *s, int stream_id) {
+static void tx_emit_block(tx_stream_t *s, int stream_id, XLlFifo *f) {
     uint8_t block[PL_BLOCK_SIZE];
 
     /* [0] = stream bit (7) + 7-bit block counter of THIS stream. The receiver
@@ -597,7 +599,7 @@ static void tx_emit_block(tx_stream_t *s, int stream_id) {
     }
     s->count -= BLOCK_PAYLOAD_SIZE;
 
-    send_block_to_pl(block);
+    send_block_to_pl(block, f);
 }
 
 /* Arbiter: strict priority, telemetry first.
@@ -608,31 +610,33 @@ static void tx_emit_block(tx_stream_t *s, int stream_id) {
  *
  * Worst case a telemetry block waits for the data block already handed to the
  * PL, i.e. one block time - not the length of the video backlog ahead of it. */
-void tx_process() {
-    while (1) {
-        tx_stream_t *s;
-        int stream_id;
+/* Раздача по FIFO. Арбитра здесь больше нет: с появлением второй FIFO
+ * очерёдность в эфире решает ПЛИС, а задача ПС — только разложить сегменты
+ * по своим очередям.
+ *
+ * Два независимых цикла, а не выбор «кто следующий»: переполнение одной FIFO
+ * не должно останавливать другую. Раньше строгий приоритет был вынужденной
+ * мерой — обе очереди делили одну FIFO, и телеметрия вставала за видео уже
+ * внутри неё. */
+static void tx_drain_stream(int stream_id, XLlFifo *f)
+{
+    tx_stream_t *s = &tx_str[stream_id];
 
-        if (tx_str[STREAM_TLM].count >= BLOCK_PAYLOAD_SIZE) {
-            s = &tx_str[STREAM_TLM];  stream_id = STREAM_TLM;
-        } else if (tx_str[STREAM_DATA].count >= BLOCK_PAYLOAD_SIZE) {
-            s = &tx_str[STREAM_DATA]; stream_id = STREAM_DATA;
-        } else {
-            break;                    /* neither stream has a full block */
-        }
-
-        /* If TX FIFO full - exit, radio_poll will resend.
-         * Новая платформа убрала 28-байтовое обрамление (преамбула, маркер,
-         * контрольная сумма, хвостовые нули закомментированы в
-         * send_block_to_pl), поэтому в FIFO уходит ровно PL_BLOCK_SIZE. */
-        if (XLlFifo_iTxVacancy(&fifo) < ((PL_BLOCK_SIZE + 0) / 4)) {
+    while (s->count >= BLOCK_PAYLOAD_SIZE) {
+        /* Обрамление платформа сняла, в FIFO уходит ровно PL_BLOCK_SIZE. */
+        if (XLlFifo_iTxVacancy(f) < ((PL_BLOCK_SIZE + 0) / 4)) {
             dbg_err_tx_stall++;
             break;
         }
-
-        tx_emit_block(s, stream_id);
+        tx_emit_block(s, stream_id, f);
     }
 }
+
+void tx_process() {
+    tx_drain_stream(STREAM_TLM,  &fifo);
+    tx_drain_stream(STREAM_DATA, &fifo_npr_tx);
+}
+
 
 
 err_t radio_linkoutput(struct netif *netif, struct pbuf *p) {
@@ -922,6 +926,10 @@ static uint32_t now_ms(void) {
     return (uint32_t)((t * 1000ULL) / COUNTS_PER_SECOND);
 }
 
+void radio_stream_set_fifo_depth_data(uint32_t words) {
+    g_fifo_data_depth = words;
+}
+
 void radio_stream_set_fifo_depth(uint32_t words) {
     g_fifo_tx_depth = words;
 }
@@ -939,8 +947,8 @@ void radio_stream_get_queue_stats(radio_queue_stats_t *out) {
     out->err_tx_reject   = tx_str[STREAM_DATA].dbg_reject;
     out->err_tx_stall    = dbg_err_tx_stall;
     out->err_fifo_full   = dbg_err_fifo_full;
-    out->fifo_tx_vacancy = XLlFifo_iTxVacancy(&fifo);
-    out->fifo_tx_depth   = g_fifo_tx_depth;
+    out->fifo_tx_vacancy = XLlFifo_iTxVacancy(&fifo_npr_tx);
+    out->fifo_tx_depth   = g_fifo_data_depth;
     out->rx_count        = rx_str[STREAM_DATA].count;
 
     out->tlm_ring_size   = tx_str[STREAM_TLM].size;
@@ -948,6 +956,8 @@ void radio_stream_get_queue_stats(radio_queue_stats_t *out) {
     out->tlm_count_max   = tx_str[STREAM_TLM].dbg_count_max;
     out->tlm_pkts        = tx_str[STREAM_TLM].dbg_pkts;
     out->tlm_reject      = tx_str[STREAM_TLM].dbg_reject;
+    out->tlm_fifo_vacancy = XLlFifo_iTxVacancy(&fifo);
+    out->tlm_fifo_depth   = g_fifo_tx_depth;
 }
 
 void radio_stream_reset_queue_stats(void) {

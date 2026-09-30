@@ -20,15 +20,20 @@
 #define FIFO_RX_DEV_BASE_ADDR XPAR_AXI_FIFO_MM_S_0_BASEADDR
 #define FIFO_DEB_DEV_BASE_ADDR XPAR_AXI_FIFO_MM_S_1_BASEADDR
 
+/* Вторая передающая FIFO (добавлена в ПЛИС 2026-09-30).
+ * Разделение: телеметрия уходит в старую FIFO_RX (MM_S_0), данные —
+ * в эту. Приём по-прежнему весь через MM_S_0. */
+#define FIFO_NPR_TX_DEV_BASE_ADDR XPAR_AXI_FIFO_MM_S_2_BASEADDR
+
 
 
 #define BRIDGE 1
 
 //#define IS_BORT 1
 
-//#define IS_MASTER 1
+#define IS_MASTER 1
 //#define IS_OLD_PAR 1
-#define IS_SLAVE 1
+//#define IS_SLAVE 1
 
 #define IS_ANTSDR
 //#define IS_MAKET_PKRV
@@ -38,7 +43,7 @@
  * модеме перед прошивкой: 1-й модем=1, 2-й=2, и т.д. Используется для адресных
  * broadcast-команд (0xA0 group=5) и кладётся в каждый 188-байтный радио-сегмент. */
 #ifndef DEVICE_ID_DEFAULT
-#define DEVICE_ID_DEFAULT  2
+#define DEVICE_ID_DEFAULT  21
 #endif
 
 #define RX_CORE_BASEADDR XPAR_PPOS_DSP_0_S01_AXI_BASEADDR
@@ -60,9 +65,9 @@
 
 #define RX_CHAN0_DEB_W 5
 
-/* ===================================================================
- *  Firmware version / role + WDT default (мерж WDT-стабильности)
- * =================================================================== */
+/* ===================
+ *  Firmware version
+ * =================== */
 #define FW_VERSION   "ASYM-14-1"   /* слейв 14 сегментов за слот, мастер 1 */
 
 #if defined(IS_MASTER) && !defined(IS_SLAVE)

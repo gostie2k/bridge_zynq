@@ -192,6 +192,7 @@ static XUartPs Uart1_Ps;		/* The instance of the UART Driver */
 static XGpioPs Gpio_Ps;           /* The instance of the GPIO Driver */
 static XScuGic ScuGic; // Interrupt Controller Driver
 XLlFifo fifo;
+XLlFifo fifo_npr_tx;   /* вторая передающая: данные */
 XLlFifo fifo_deb;
 static void IntrHandler(void *CallBackRef, u32 Bank, u32 Status);
 static void exec_func(bool *func_start, u8 func_type, u8 *func_par);
@@ -209,6 +210,7 @@ void recv_callback(void *arg, struct udp_pcb *upcb, struct pbuf *p, const ip_add
 unsigned int swap32(unsigned int value);
 unsigned short swap16(unsigned short value);
 int init_tx_rx_fifo();
+int init_npr_tx_fifo();
 int init_deb_fifo();
 //void send_debug_fifo_krt_gr_dat();
 //void send_debug_fifo_krt_gr_dat_empty();
@@ -1468,6 +1470,11 @@ int main()
 
     if (init_tx_rx_fifo() != XST_SUCCESS) {
         xil_printf("FIFO initialization failed.\n\r");
+        return -1;
+    }
+
+    if (init_npr_tx_fifo() != XST_SUCCESS) {
+        xil_printf("FIFO NPR TX initialization failed.\n\r");
         return -1;
     }
 
@@ -3723,6 +3730,29 @@ unsigned short swap16(unsigned short value) {
 
 
 
+int init_npr_tx_fifo() {
+
+    XLlFifo_Config fifo_cfg = {FIFO_NPR_TX_DEV_BASE_ADDR};
+    int status = XLlFifo_CfgInitialize(&fifo_npr_tx, &fifo_cfg, FIFO_NPR_TX_DEV_BASE_ADDR);
+    if (status != XST_SUCCESS) {
+        xil_printf("FIFO_NPR_TX initialization failed.\n\r");
+        return XST_FAILURE;
+    }
+    XLlFifo_IntClear(&fifo_npr_tx, 0xFFFFFFFF);
+    XLlFifo_Reset(&fifo_npr_tx);
+
+    /* Сразу после сброса вакансия равна полной глубине — единственный способ
+     * узнать её из программы. Это FIFO данных, её глубина и задаёт дно по
+     * задержке для видео. */
+    {
+        u32 depth = XLlFifo_iTxVacancy(&fifo_npr_tx);
+        radio_stream_set_fifo_depth_data(depth);
+        xil_printf("[FIFO] NPR TX depth = %u words (%u bytes, %u blocks)\r\n",
+                   (unsigned)depth, (unsigned)depth * 4, (unsigned)depth / 47);
+    }
+    return XST_SUCCESS;
+}
+
 int init_tx_rx_fifo() {
 
     XLlFifo_Config fifo_cfg = {FIFO_RX_DEV_BASE_ADDR};
@@ -3740,7 +3770,7 @@ int init_tx_rx_fifo() {
      * обрамление снято, поэтому один сегмент стоит 188/4 = 47 слов. */
     {
         u32 depth = XLlFifo_iTxVacancy(&fifo);
-        radio_stream_set_fifo_depth(depth);
+        radio_stream_set_fifo_depth(depth);   /* FIFO телеметрии */
         xil_printf("[FIFO] TX depth = %u words (%u bytes, %u blocks)\r\n",
                    (unsigned)depth, (unsigned)depth * 4, (unsigned)depth / 47);
     }

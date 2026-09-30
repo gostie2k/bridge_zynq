@@ -543,7 +543,7 @@ static void handle_proto_0x90(struct udp_pcb *upcb, uint8_t *data,
         case 0x23: { /* Queue telemetry: ring occupancy + air rate + FIFO depth.
                       * Read-only snapshot used to compare buffering between
                       * builds; ring_size identifies which build answered. */
-#define QSTAT_LEN 70
+#define QSTAT_LEN 78
             struct pbuf *pb = resp_alloc(0x23, QSTAT_LEN);
             if (!pb) break;
             uint8_t *d = (uint8_t *)pb->payload;
@@ -573,9 +573,27 @@ static void handle_proto_0x90(struct udp_pcb *upcb, uint8_t *data,
             S_PUT(qs.tlm_count_max);
             S_PUT(qs.tlm_pkts);
             S_PUT(qs.tlm_reject);
+            S_PUT(qs.tlm_fifo_vacancy);
+            S_PUT(qs.tlm_fifo_depth);
 #undef S_PUT
 #undef QSTAT_LEN
             resp_send(upcb, pb, addr, port);
+            break;
+        }
+
+        case 0x26: { /* Чтение регистров ppos ПРЯМО ИЗ AXI (не теневой копии):
+                      * [2..25] = creg0..creg5, по 4 байта little-endian.
+                      * Нужно, чтобы видеть, что реально стоит в железе:
+                      * slot_dur в creg5, num_seg в creg4. */
+#define CREGS_LEN 26
+            struct pbuf *pb = resp_alloc(0x26, CREGS_LEN);
+            if (!pb) break;
+            uint8_t *d = (uint8_t *)pb->payload;
+            for (int i = 0; i < 6; i++)
+                put_le32(d + 2 + i * 4,
+                         AXI_CNTRL_REG_READ(AXI_CNTRL_REG_BASEADDR, i * 4));
+            resp_send(upcb, pb, addr, port);
+#undef CREGS_LEN
             break;
         }
 
