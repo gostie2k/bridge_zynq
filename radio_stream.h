@@ -4,6 +4,9 @@
 #include "lwip/netif.h"
 #include "lwip/pbuf.h"
 
+#include "xllfifo.h"
+#include "xllfifo_hw.h"
+
 // Р�РЅРёС†РёР°Р»РёР·Р°С†РёСЏ
 void radio_stream_init(void);
 
@@ -14,8 +17,14 @@ void radio_tx_periodic_flush(void);
 
 void tx_process();
 
-// Р§С‚РµРЅРёРµ РІСЃРµС… РіРѕС‚РѕРІС‹С… Р±Р»РѕРєРѕРІ РёР· RX FIFO (РІС‹Р·С‹РІР°С‚СЊ РёР· main loop)
-void drain_rx_fifo(void);
+/* Разбор принятого из FIFO. Приёмных каналов теперь два, поэтому FIFO
+ * приходит параметром:
+ *   drain_rx_fifo       — информационный канал: диагностика + сегмент в мост;
+ *   drain_cntrl_tx_fifo — канал управления: только диагностика, в мост
+ *                         ничего не отдаётся.
+ * Вызывать из главного цикла. */
+void drain_rx_fifo(XLlFifo* fifo_data);
+void drain_cntrl_tx_fifo(XLlFifo* fifo_data);
 
 // Р“Р»Р°РІРЅР°СЏ С„СѓРЅРєС†РёСЏ РѕРїСЂРѕСЃР°: drain RX + РґРѕСЃС‹Р»РєР° TX (РІС‹Р·С‹РІР°С‚СЊ РІ main loop)
 void radio_poll(void);

@@ -347,6 +347,111 @@ static void handle_proto_0x90(struct udp_pcb *upcb, uint8_t *data,
             break;
         }
 
+        case 0x1A: { /* НПУ: измерители INA226 за мостом.
+                      *
+                      * Ответ 43 байта: [2] — счётчик обходов, дальше
+                      * восемь блоков по пять байт для адресов 0x40..0x47:
+                      *   +0      статус (0 — норма, иначе код I2CStat
+                      *           или 0xFE — ответил, но не INA226);
+                      *   +1..+2  регистр шины, младшим байтом вперёд;
+                      *   +3..+4  регистр шунта, знаковый, так же.
+                      *
+                      * Сырые регистры, без пересчёта: цена разряда
+                      * зависит от номинала шунта, и это знание живёт
+                      * в одном месте — на экране.
+                      *
+                      * Как и 0x19, отдаёт ПРЕДЫДУЩИЙ обход и ставит в
+                      * очередь новый: обход идёт около 7 мс и в обработчике
+                      * UDP ему не место. */
+#if NPU_CELL_NEW && NPU_BRIDGE_DEBUG
+            {
+                extern u8 func_type;
+                extern bool func_start;
+                struct pbuf *pb = resp_alloc(0x1A, 43);
+                if (pb) {
+                    uint8_t *d = (uint8_t *)pb->payload;
+                    int i;
+                    d[2] = npu_pwr.cnt;
+                    for (i = 0; i < 8; ++i) {
+                        uint8_t *p = &d[3 + i * 5];
+                        p[0] = npu_pwr.stat[i];
+                        p[1] = (uint8_t)(npu_pwr.bus[i]);
+                        p[2] = (uint8_t)(npu_pwr.bus[i] >> 8);
+                        p[3] = (uint8_t)((uint16_t)npu_pwr.shunt[i]);
+                        p[4] = (uint8_t)((uint16_t)npu_pwr.shunt[i] >> 8);
+                    }
+                    resp_send(upcb, pb, addr, port);
+                }
+                func_type  = 23;
+                func_start = true;
+            }
+#endif
+            break;
+        }
+
+        case 0x19: { /* НПУ: короткий кадр на мост SC18IS604.
+                      *
+                      * Ответ 15 байт: [2..9] — восемь байт ответа на
+                      * команду 0xFE, [10] — регистр I2CClock,
+                      * [11..14] — счётчик опросов, младшим байтом
+                      * вперёд.
+                      *
+                      * ⬆ Отдаём результат ПРЕДЫДУЩЕГО запроса, а
+                      * новый только ставим в очередь: движок один, и
+                      * обмен прямо отсюда влез бы в середину обмена
+                      * главного цикла. При повторении команды это
+                      * просто отставание на один шаг; счётчик в ответе
+                      * показывает, что опросы действительно идут. */
+#if NPU_CELL_NEW && NPU_BRIDGE_DEBUG
+            {
+                extern u8 func_type;
+                extern bool func_start;
+                struct pbuf *pb = resp_alloc(0x19, 15);
+                if (pb) {
+                    uint8_t *d = (uint8_t *)pb->payload;
+                    int i;
+                    for (i = 0; i < 8; ++i)
+                        d[2 + i] = bridge_probe_last.ver[i];
+                    d[10] = bridge_probe_last.i2cclk;
+                    d[11] = (uint8_t)(bridge_probe_last.cnt      );
+                    d[12] = (uint8_t)(bridge_probe_last.cnt >>  8);
+                    d[13] = (uint8_t)(bridge_probe_last.cnt >> 16);
+                    d[14] = (uint8_t)(bridge_probe_last.cnt >> 24);
+                    resp_send(upcb, pb, addr, port);
+                }
+                func_type  = 22;
+                func_start = true;
+            }
+#endif
+            break;
+        }
+
+        case 0x18: { /* НПУ: прочитанное состояние выходов ячейки.
+                      * Ответ 6 байт: [2]=ena (бит на подрешётку, порядок
+                      * com_dev_type), [3]=код преселектора,
+                      * [4]=регистр 0x04 (D0=1 — ячейка вышла из
+                      * shutdown и отвечает), [5]=резерв.
+                      *
+                      * Отдаём кэш из статусного цикла, а не читаем SPI
+                      * здесь: движок один, и обмен из обработчика UDP
+                      * влез бы в середину обмена главного цикла. Кэш
+                      * обновляется раз в секунду, а состояние выходов
+                      * меняется только нашими же командами, так что
+                      * свежести хватает. */
+            extern struct npu_outputs npu_out;
+            struct pbuf *pb = resp_alloc(0x18, 6);
+            if (!pb) break;
+            uint8_t *d = (uint8_t *)pb->payload;
+            d[2] = npu_out.ena;
+            d[3] = npu_out.f_diap;
+            d[4] = npu_out.cfg;
+            d[5] = 0;
+            resp_send(upcb, pb, addr, port);
+            LOG2("[CMD] NPU readback ena=0x%02X diap=%d cfg=0x%02X\r\n",
+                 npu_out.ena, npu_out.f_diap, npu_out.cfg);
+            break;
+        }
+
             /* ==================== READ commands ==================== */
 
         case 0x10: { /* Read TX frequency */

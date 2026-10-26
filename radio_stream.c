@@ -152,7 +152,9 @@ static u32 dbg_err_tx_stall = 0;  // tx_process aborted (TX FIFO full)
 /* ---- Диагностика приёмного тракта (добавлено для разбора «блоки идут,
  * пакеты не собираются»). Только счётчики, на поведение не влияют. ---- */
 static u32 dbg_rx_len_new    = 0;  /* кадров 47+DEB слов — новый формат      */
-static u32 dbg_rx_len_legacy = 0;  /* кадров 54(+DEB) слов — старый формат   */
+static u32 dbg_rx_len_legacy = 0;  /* старый формат 54 слов: всегда 0, разбор
+                                    * снят вместе с мёртвым кодом; поле
+                                    * оставлено, чтобы не менять ответ 0x25 */
 static u32 dbg_rx_len_other  = 0;  /* кадров иной длины — не разобраны       */
 static u32 dbg_rx_len_last   = 0;  /* длина последнего НЕОЖИДАННОГО кадра   */
 static u32 dbg_rx_magic      = 0;  /* сколько раз найдена метка FA CE        */
@@ -254,206 +256,94 @@ static uint32_t calc_crc32_block(const uint8_t *data, uint32_t len, uint32_t crc
 // Forward declaration (РѕРїСЂРµРґРµР»РµРЅРёРµ РЅРёР¶Рµ)
 void radio_input_block(uint8_t *block_188, struct netif *inp_netif);
 
-// =========================================================
-// Р§С‚РµРЅРёРµ РІСЃРµС… РіРѕС‚РѕРІС‹С… Р±Р»РѕРєРѕРІ РёР· RX FIFO (РїРѕСЃР»Рµ СЌРЅРєРѕРґРµСЂР°)
-// Р’С‹Р·С‹РІР°РµС‚СЃСЏ РёР· main loop Рё РёР· send_block_to_pl
-// =========================================================
-void drain_rx_fifo(void) {
-
-	bool is_val;
-
-	if(XLlFifo_iRxOccupancy(&fifo)) {
-		u32 RxWord;
-		u32 preamb0, preamb1;
-		u32 ReceiveLength = (XLlFifo_iRxGetLen(&fifo))/4;
-
-
-/*
-
-if ((ReceiveLength==54)||(ReceiveLength==54 + RX_CHAN0_DEB_W )) { dbg_rx_len_legacy++; }
-if ((ReceiveLength==54)||(ReceiveLength==54 + RX_CHAN0_DEB_W ))
-			{
-
-				RxWord = XLlFifo_RxGetWord(&fifo);
-				preamb0 = RxWord;
-				RxWord = XLlFifo_RxGetWord(&fifo);
-				preamb1 = RxWord;
-
-				uint8_t fifo_buf[PL_RX_BYTES+28];
-
-				memcpy((uint8_t*) &fifo_buf[0],  &preamb0,4);
-				memcpy((uint8_t*) &fifo_buf[0]+4,&preamb1,4);
-
-				is_val = (preamb0 == 0xb6ce261d);
-				is_val = is_val && ((preamb1&0xffff0000) == 0x6d9c0000);
-
-
-
-				uint16_t cnt_seg_in = (preamb1&0x0000ffff);
-				uint16_t check = cnt_seg_in;
-				uint16_t check_rx;
-
-				for (int i=2; i < 54; i++) {
-								RxWord = XLlFifo_RxGetWord(&fifo);
-
-								memcpy((u32*) &fifo_buf[0] + i, &RxWord, 4);
-
-
-								if ((i>=3)&&(i<3+PL_RX_WORDS)) {
-					            check+=  (uint16_t)fifo_buf[4*i] | ((uint16_t)fifo_buf[4*i+1] << 8);
-					            check+=  (uint16_t)fifo_buf[4*i+2] | ((uint16_t)fifo_buf[4*i+3] << 8);
-								}
-
-								if (i == 3+PL_RX_WORDS) check_rx = RxWord;
-
-							}
-
-				if( ReceiveLength==54 + RX_CHAN0_DEB_W )
-				{
-
-					RxWord = XLlFifo_RxGetWord(&fifo);
-
-					buf_deb_chan_rx[buf_deb_chan_rx_wad].mer = RxWord;
-
-					RxWord = XLlFifo_RxGetWord(&fifo);
-
-					buf_deb_chan_rx[buf_deb_chan_rx_wad].agc_gain = RxWord&0x0000ffff;
-
-					buf_deb_chan_rx[buf_deb_chan_rx_wad].ad9361_gain = (RxWord>>24)&0x000000ff;
-					buf_deb_chan_rx[buf_deb_chan_rx_wad].ad9361_rssi = (RxWord>>16)&0x000000ff;
-
-
-					buf_deb_chan_rx_wad++;
-
-                    if (buf_deb_chan_rx_wad == BUF_DEB_CHAN_RX_DEPTH) buf_deb_chan_rx_wad = 0;
-
-				}
-
-
-
-
-
-
-
-						if (!is_val)
-				{
-							//xil_printf("!p54 is_val %08x %08x \n\r",preamb0,preamb1);
-				            return;
-				}
-
-	   //static u32     drain_rx_words[PL_RX_WORDS];
-	   //static uint8_t drain_rx_block[PL_RX_BYTES];
-
-
-		if (check_rx!=check)
-			{
-				//printf("cnt_seg_in=%04X check=%04X check_rx=%08X \n\r",cnt_seg_in,  check, check_rx);
-                return;
-			} else if (check_rx==0) return;
-
-
-		//printf("cnt_seg_in=%04X check=%04X\n\r", cnt_seg_in, check);
-
-        for (int i = 0; i < PL_RX_WORDS*4; i++) {
-        	drain_rx_block[i] = fifo_buf[12+i];
-        }
-        radio_input_block(drain_rx_block, &port3_bridge);
-
-
-
-	return;
-
-			}
-
-
-*/
-
-
-if (ReceiveLength==47 + RX_CHAN0_DEB_W) { dbg_rx_len_new++; }
-if (ReceiveLength==47 + RX_CHAN0_DEB_W)
-			{
-
-				uint8_t fifo_buf[PL_RX_BYTES+RX_CHAN0_DEB_W*4];
-
-				for (int i=0; i < 47; i++) {
-
-								RxWord = XLlFifo_RxGetWord(&fifo);
-								memcpy((u32*) &fifo_buf[0] + i, &RxWord, 4);
-
-				}
-
-
-				buf_deb_chan_rx[buf_deb_chan_rx_wad].cnan_id = 0;
-
-				buf_deb_chan_rx[buf_deb_chan_rx_wad].cnt_seg = fifo_buf[0];
-
-				u32 ap_dat0 = XLlFifo_RxGetWord(&fifo);
-
-				buf_deb_chan_rx[buf_deb_chan_rx_wad].mer = ap_dat0;
-
-				u32 ap_dat1 = XLlFifo_RxGetWord(&fifo);
-
-
-				buf_deb_chan_rx[buf_deb_chan_rx_wad].ad9361_gain = (ap_dat1>>8)&0x000000ff;
-				buf_deb_chan_rx[buf_deb_chan_rx_wad].ad9361_rssi = (ap_dat1>>0)&0x000000ff;
-
-
-				u32 ap_dat2 = XLlFifo_RxGetWord(&fifo);
-
-
-				buf_deb_chan_rx[buf_deb_chan_rx_wad].rs_dec_stat.inside.rs_dec_bit_err_10 =  ap_dat2 & 0x000000ff;
-				buf_deb_chan_rx[buf_deb_chan_rx_wad].rs_dec_stat.inside.rs_dec_bit_err_01 = (ap_dat2 >> 8) & 0x000000ff;
-				buf_deb_chan_rx[buf_deb_chan_rx_wad].rs_dec_stat.inside.rs_dec_err_cnt    = (ap_dat2 >> 16) & 0x0000001f;
-				buf_deb_chan_rx[buf_deb_chan_rx_wad].rs_dec_stat.inside.rs_dec_err_found  = (ap_dat2 >> 21) & 0x00000001;
-				buf_deb_chan_rx[buf_deb_chan_rx_wad].rs_dec_stat.inside.rs_dec_fail       = (ap_dat2 >> 22) & 0x00000001;
-
-
-				u32 ap_dat3 = XLlFifo_RxGetWord(&fifo);
-
-
-				buf_deb_chan_rx[buf_deb_chan_rx_wad].vit_err_cnt = ap_dat3 & 0x000007ff;
-
-
-				u32 ap_dat4 = XLlFifo_RxGetWord(&fifo);
-
-				buf_deb_chan_rx[buf_deb_chan_rx_wad].del_ack = ap_dat4;
-
-			    buf_deb_chan_rx_wad++;
-
-				if (buf_deb_chan_rx_wad == BUF_DEB_CHAN_RX_DEPTH) buf_deb_chan_rx_wad = 0;
-
-
-				//printf("ap_dat0 = %08X ap_dat1= %08X ap_dat2 = %08X ap_dat3= %08X\r\n",ap_dat0, ap_dat1,ap_dat2, ap_dat3);
-
-
- if (buf_deb_chan_rx[buf_deb_chan_rx_wad].rs_dec_stat.inside.rs_dec_fail == 0)
- {
-        for (int i = 0; i < PL_RX_WORDS*4; i++) {
-        	drain_rx_block[i] = fifo_buf[0+i];
-        }
-
-
-        radio_input_block(drain_rx_block, &port3_bridge);
- }
-
-
-	return;
-
-			}
-
-
-
-
-
-	else
-		{
-			dbg_rx_len_other++; dbg_rx_len_last = ReceiveLength;
-			xil_printf("fifo_rx_len=%d\n\r", ReceiveLength);
-			for (int i=0; i < ReceiveLength; i++)  RxWord = XLlFifo_RxGetWord(&fifo);
-		}
-
+/* =========================================================
+ * Разбор принятого из FIFO ПЛИС.
+ *
+ * Кадр: 47 слов сегмента плюс RX_CHAN0_DEB_W слов диагностики, которую
+ * ПЛИС дописывает к каждому принятому сегменту. Диагностика ложится в
+ * кольцо buf_deb_chan_rx, оттуда её забирает send_deb_rx_append(): шлёт
+ * наружу по UDP и накапливает секундную статистику канала.
+ *
+ * Приёмных каналов теперь два, и различаются они ровно двумя вещами:
+ * номером, которым помечается запись диагностики, и тем, отдавать ли
+ * сегмент в мост. Поэтому тело одно, а снаружи две тонкие обёртки.
+ * ========================================================= */
+static void drain_chan_fifo(XLlFifo *fifo_data, uint8_t chan_id, bool to_bridge)
+{
+	if (!XLlFifo_iRxOccupancy(fifo_data)) return;
+
+	u32 RxWord;
+	u32 ReceiveLength = (XLlFifo_iRxGetLen(fifo_data)) / 4;
+
+	if (ReceiveLength != 47 + RX_CHAN0_DEB_W) {
+		/* Счётчики длин ведём только по информационному каналу: диагностика
+		 * 0x25 рассказывает про сборку пакетов, и подмешивать туда канал
+		 * управления значит сделать её нечитаемой. */
+		if (to_bridge) { dbg_rx_len_other++; dbg_rx_len_last = ReceiveLength; }
+		xil_printf("fifo_rx_len=%d\n\r", ReceiveLength);
+		for (u32 i = 0; i < ReceiveLength; i++) RxWord = XLlFifo_RxGetWord(fifo_data);
+		return;
 	}
 
+	if (to_bridge) dbg_rx_len_new++;
+
+	uint8_t fifo_buf[PL_RX_BYTES + RX_CHAN0_DEB_W * 4];
+
+	for (int i = 0; i < 47; i++) {
+		RxWord = XLlFifo_RxGetWord(fifo_data);
+		memcpy((u32*) &fifo_buf[0] + i, &RxWord, 4);
+	}
+
+	struct deb_chan_rx *d = &buf_deb_chan_rx[buf_deb_chan_rx_wad];
+
+	d->cnan_id = chan_id;
+	d->cnt_seg = fifo_buf[0];
+
+	u32 ap_dat0 = XLlFifo_RxGetWord(fifo_data);
+	d->mer = ap_dat0;
+
+	u32 ap_dat1 = XLlFifo_RxGetWord(fifo_data);
+	d->ad9361_gain = (ap_dat1 >> 8) & 0x000000ff;
+	d->ad9361_rssi = (ap_dat1 >> 0) & 0x000000ff;
+
+	u32 ap_dat2 = XLlFifo_RxGetWord(fifo_data);
+	d->rs_dec_stat.inside.rs_dec_bit_err_10 =  ap_dat2        & 0x000000ff;
+	d->rs_dec_stat.inside.rs_dec_bit_err_01 = (ap_dat2 >>  8) & 0x000000ff;
+	d->rs_dec_stat.inside.rs_dec_err_cnt    = (ap_dat2 >> 16) & 0x0000001f;
+	d->rs_dec_stat.inside.rs_dec_err_found  = (ap_dat2 >> 21) & 0x00000001;
+	d->rs_dec_stat.inside.rs_dec_fail       = (ap_dat2 >> 22) & 0x00000001;
+
+	u32 ap_dat3 = XLlFifo_RxGetWord(fifo_data);
+	d->vit_err_cnt = ap_dat3 & 0x000007ff;
+
+	u32 ap_dat4 = XLlFifo_RxGetWord(fifo_data);
+	d->del_ack = ap_dat4;
+
+	/* Признак снимаем ДО продвижения кольца. В версии коллеги проверка стоит
+	 * после инкремента и читает уже следующую ячейку — чужую запись,
+	 * оставшуюся от прошлого оборота кольца. Решение «отдавать сегмент или
+	 * нет» получалось случайным. */
+	const bool rs_ok = (d->rs_dec_stat.inside.rs_dec_fail == 0);
+
+	buf_deb_chan_rx_wad++;
+	if (buf_deb_chan_rx_wad == BUF_DEB_CHAN_RX_DEPTH) buf_deb_chan_rx_wad = 0;
+
+	/* В мост — только из информационного канала и только то, что RS
+	 * восстановил. Канал управления отдаёт лишь диагностику. */
+	if (to_bridge && rs_ok) {
+		for (int i = 0; i < PL_RX_WORDS * 4; i++) drain_rx_block[i] = fifo_buf[0 + i];
+		radio_input_block(drain_rx_block, &port3_bridge);
+	}
+}
+
+void drain_rx_fifo(XLlFifo* fifo_data)
+{
+	drain_chan_fifo(fifo_data, 0, true);
+}
+
+void drain_cntrl_tx_fifo(XLlFifo* fifo_data)
+{
+	drain_chan_fifo(fifo_data, 1, false);
 }
 
 
@@ -712,7 +602,7 @@ void radio_tx_periodic_flush(void) {
     tx_process();
 }
 void radio_poll(void) {
-    drain_rx_fifo();
+    drain_rx_fifo(&fifo);
     tx_process();  // resends blocks from the rings if room in FIFO
 }
 

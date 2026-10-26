@@ -117,8 +117,13 @@ u16_t last_client_port;
 
 /* --- from _1: SPI engine descriptors --- */
 struct no_os_spi_desc*  spi_eng_ad9361;
-struct no_os_spi_desc*  spi_eng_npu_com_board;
-struct no_os_spi_desc*  spi_eng_npu_pow_board;
+struct no_os_spi_desc*  spi_eng_npu;
+
+/* Прочитанное состояние выходов ячейки НПУ. Обновляется раз в секунду в
+ * статусном цикле ниже, отдаётся по запросу 0x90 0x18 из cmd_udp.c.
+ * Через кэш, а не чтением прямо в обработчике UDP: движок SPI один, и
+ * обмен из обработчика влез бы в середину обмена главного цикла. */
+struct npu_outputs npu_out;
 
 u8_t sys_hours = 0;
 u8_t sys_minutes = 0;
@@ -1562,10 +1567,26 @@ int main()
 
 
 
-     AXI_CNTRL_REG_WRITE(AXI_CNTRL_REG_BASEADDR, 8, 0x00010000);
+     /* Профиль GPIO нужен до первого обмена с ячейкой по SPI. Был сырой
+      * 0x00010000: под прежней картой creg2 это GPIOnR_TYPE = 1, а под
+      * новой тот же бит 16 — это Tang. Значения профилей — в
+      * комментарии в modem_init().
+      *
+      * Профиль берётся из NPU_GPIO_PROFILE, а не числом: инициализация
+      * MAX7301 идёт следующей строкой, и переключить профиль из GUI
+      * потом уже поздно — микросхема так и останется в shutdown. */
+     #ifdef  IS_BORT
+     AXI_CNTRL_REG_WRITE(AXI_CNTRL_REG_BASEADDR, 8, (u32)(2u << 12));
+     #else
+     AXI_CNTRL_REG_WRITE(AXI_CNTRL_REG_BASEADDR, 8, (u32)(NPU_GPIO_PROFILE << 12));
+     #endif
 
-     spi_engine_npu_com_board_init(&spi_eng_npu_com_board);
-     spi_engine_npu_pow_board_init(&spi_eng_npu_pow_board);
+     /* На борту ячейки НПУ нет — дескриптор не создаём вовсе. Обращения
+      * к нему защищены проверкой на NULL в exec_func и в статусном
+      * цикле: движок разыменовывает desc->extra без проверки. */
+     #ifndef IS_BORT
+     spi_engine_npu_init(&spi_eng_npu);
+     #endif
 
      #ifdef  IS_BORT
 
@@ -1606,8 +1627,7 @@ int main()
 
 
     spi_engine_ad9361_init(&spi_eng_ad9361);
-    //spi_engine_npu_com_board_init(&spi_eng_npu_com_board);
-    //spi_engine_npu_pow_board_init(&spi_eng_npu_pow_board);
+    //spi_engine_npu_init(&spi_eng_npu);
 
 
     XTime_GetTime(&cur_time);
@@ -1673,8 +1693,7 @@ int main()
 
 
 
-   //spi_engine_npu_com_board_init(&spi_eng_npu_com_board);
-   //spi_engine_npu_pow_board_init(&spi_eng_npu_pow_board);
+   //spi_engine_npu_init(&spi_eng_npu);
 
 
 
@@ -1694,27 +1713,33 @@ int main()
 #endif
 
 
- d[0]=0x80; d[1]=0xfb ;d[2]=0x48;
- no_os_spi_write_and_read_11bit(&desc_tmp,&d[0],1);
+  d[0]=0x80; d[1]=0xfb ;d[2]=0x48;
+  //no_os_spi_write_and_read_11bit(&desc_tmp,&d[0],1);
+  no_os_spi_write_and_read(&desc_tmp,&d[0],3);
 
- d[0]=0x81;d[1]=0x10;d[2]=0x00;
- no_os_spi_write_and_read_11bit(&desc_tmp,&d[0],1);
+  d[0]=0x81;d[1]=0x10;d[2]=0x00;
+  //no_os_spi_write_and_read_11bit(&desc_tmp,&d[0],1);
+  no_os_spi_write_and_read(&desc_tmp,&d[0],3);
 
+  d[0]=0x81;d[1]=0x06;d[2]=0x6F;
+  //no_os_spi_write_and_read_11bit(&desc_tmp,&d[0],1);
+  no_os_spi_write_and_read(&desc_tmp,&d[0],3);
 
- d[0]=0x81;d[1]=0x06;d[2]=0x6F;
- no_os_spi_write_and_read_11bit(&desc_tmp,&d[0],1);
+  d[0]=0x81;d[1]=0x5C;d[2]=0x72;
+  //no_os_spi_write_and_read_11bit(&desc_tmp,&d[0],1);
+  no_os_spi_write_and_read(&desc_tmp,&d[0],3);
 
- d[0]=0x81;d[1]=0x5C;d[2]=0x72;
- no_os_spi_write_and_read_11bit(&desc_tmp,&d[0],1);
+  d[0]=0x81;d[1]=0x07;d[2]=0x1f;
+  //no_os_spi_write_and_read_11bit(&desc_tmp,&d[0],1);
+  no_os_spi_write_and_read(&desc_tmp,&d[0],3);
 
- d[0]=0x81;d[1]=0x07;d[2]=0x1f;
- no_os_spi_write_and_read_11bit(&desc_tmp,&d[0],1);
+  d[0]=0x81;d[1]=0x08;d[2]=0x25;
+  //no_os_spi_write_and_read_11bit(&desc_tmp,&d[0],1);
+  no_os_spi_write_and_read(&desc_tmp,&d[0],3);
 
- d[0]=0x81;d[1]=0x08;d[2]=0x25;
- no_os_spi_write_and_read_11bit(&desc_tmp,&d[0],1);
-
- d[0]=0x81;d[1]=0x12;d[2]=0x45;
- no_os_spi_write_and_read_11bit(&desc_tmp,&d[0],1);
+  d[0]=0x81;d[1]=0x12;d[2]=0x45;
+  //no_os_spi_write_and_read_11bit(&desc_tmp,&d[0],1);
+  no_os_spi_write_and_read(&desc_tmp,&d[0],3);
 
 
 
@@ -2068,7 +2093,10 @@ lwip_init();
     //if ( rx_chan0.creg0.inside.pkt_len == 544  ) drain_rx_fifo();
 
 
-         drain_rx_fifo();
+         /* Информационный канал — из своей FIFO в мост; канал управления —
+          * только за диагностикой, сегменты оттуда в мост не идут. */
+         drain_rx_fifo(&fifo);
+         drain_cntrl_tx_fifo(&fifo_npr_tx);
 
 
    	//if ( tx_chan0.creg0.inside.pkt_len == 4800 )
@@ -2432,6 +2460,8 @@ lwip_init();
 
 
 
+   		     /* Мощность и усиление по SPI раз в секунду. Снимаем ДО отправки,
+   		      * чтобы в пакет попало свежее значение, а не прошлой секунды. */
    		     uint8_t d[] = {0x01,0x61,0x00,0x00};
    		     no_os_spi_write_and_read(&desc_tmp,&d[0],3);
    		     //xil_printf("%02X ", d[2]);
@@ -2445,13 +2475,8 @@ lwip_init();
 
    		      rssi-=d[2];
 
-   		      gain_index_rx = d[2];
-
-   		      pow_rx = rssi + 13.9397;//3500 tone corection
-
-
-   		      status_modem->status_rx.max_pow = pow_rx;
-   	    	  status_modem->status_rx.max_gain_index = gain_index_rx;
+   		      status_modem->stat_rx.pps_pow  = rssi + 13.9397; //3500 tone corection
+   		      status_modem->stat_rx.pps_gain = d[2];
 
 
 
@@ -2528,13 +2553,19 @@ lwip_init();
 
 
 
-    			 //
+    			 /* Параметры каналов и расписания — в тот же пакет: получателю
+    			  * иначе не с чем сопоставить накопленные счётчики. Канал
+    			  * управления описывается параметрами tx_chan0, информационный
+    			  * — rx_chan0. */
+    			 status_modem->stat_rx.mod     = rx_chan0.creg0.inside.mod;
+    			 status_modem->stat_rx.code    = rx_chan0.creg0.inside.code;
 
-    	    	      //mean_dist = 100.*mean_dist;
-    	              //mean_dist = mean_dist / status_modem->status_rx.cnt_pkt;
+    			 status_modem->stat_cntrl.mod  = tx_chan0.creg0.inside.mod;
+    			 status_modem->stat_cntrl.code = tx_chan0.creg0.inside.code;
 
-    	      	     status_modem->status_npu.del_ack = mean_dist;
-
+    			 status_modem->num_seg    = ppos.creg4.inside.num_seg;
+    			 status_modem->num_rx_seg = ppos.creg4.inside.num_rx_seg;
+    			 status_modem->slot_dur   = ppos.creg5.inside.slot_dur;
 
 
     	      	  // status_modem->creg2 = Xil_In32(AXI_CNTRL_REG_BASEADDR + 4*2);
@@ -2542,8 +2573,29 @@ lwip_init();
 
 
 
+    	     /* Индикаторы перегрева и мощности передающих подрешёток
+    	      * снимаются по SPI тем же темпом, что и остальной статус:
+    	      * иначе поле status_npu уходит в пакет нулями, потому что
+    	      * func_type = 17 никто по UDP не вызывает. */
+    	     #if NPU_STATUS_POLL
+    	     if (spi_eng_npu) {
+    	     spi_engine_npu_get_status(spi_eng_npu, &status_modem->status_npu);
+
+    	     /* Заодно перечитываем выходы — питание подрешёток и
+    	      * преселектор. Это восемнадцать кадров против двух, но если
+    	      * ячейки нет, чтение обрывается на первом же регистре:
+    	      * get_outputs проверяет 0x04 и выходит. */
+    	     spi_engine_npu_get_outputs(spi_eng_npu, &npu_out);
+    	     }
+    	     #endif
+
     	     wdt_section_mark(WDT_SEC_STATUS_SEND);
     	     send_modem_status(status_pcb, status_modem);
+
+    	     /* Счёт пошёл заново: следующая запись диагностики перезапишет
+    	      * минимумы и максимумы, а не продолжит прошлую секунду. */
+    	     status_modem->stat_rx.is_clr    = 1;
+    	     status_modem->stat_cntrl.is_clr = 1;
 
 
 
@@ -2578,8 +2630,6 @@ lwip_init();
     		 //status_modem->status_cntrl_tx.cnt_pkt = 0;
     		 //status_modem->status_cntrl_tx.cnt_err_pkt = 0;
 
-    		 status_modem->status_rx.cnt_pkt = 0;
-    		 //status_modem->status_rx.cnt_err_pkt = 0;
 
     	 }
 
@@ -3501,24 +3551,51 @@ static void exec_func(bool *func_start, u8 func_type, u8 *func_par)
 
     if (func_type == 16) print_dynamic_fdb(&bridge_netif);
 
-    if (func_type == 17) spi_engine_npu_com_board_get_status(spi_eng_npu_com_board, &status_modem->status_npu);
-    if (func_type == 18) spi_engine_npu_com_board_set_ena(spi_eng_npu_com_board,*(com_dev_type*) func_par, *(ena_type*)(func_par+1));
-    //if (func_type == 19) spi_engine_npu_pow_board_get_status(spi_eng_npu_pow_board, &status_modem->status_npu);
-    //if (func_type == 20) spi_engine_npu_pow_board_set_ena(spi_eng_npu_pow_board, *(pow_cntrl_type*) func_par, *(ena_type*)(func_par+1) );
-    if (func_type == 19) spi_engine_npu_pow_board_set_f_diap(spi_eng_npu_com_board, spi_eng_npu_pow_board,  *(pow_cntrl_type*) func_par );
+    /* Дескриптор проверяем: на борту ячейки нет и он остаётся NULL, а
+     * spi_engine_write_and_read сразу берёт desc->extra без проверки,
+     * так что одна команда НПУ по UDP уронила бы прошивку. Проверка
+     * runtime, а не #ifdef: она же прикроет случай, когда ячейка есть,
+     * но spi_engine_init не смог выделить дескриптор. */
+    if (spi_eng_npu) {
+        if (func_type == 17) spi_engine_npu_get_status(spi_eng_npu, &status_modem->status_npu);
+        /* Параметры берём побайтно: func_par — массив u8, а com_dev_type и
+         * pow_cntrl_type размером с int, поэтому разыменование через
+         * указатель на enum тянуло 4 байта и подмешивало соседние
+         * параметры (при ena = 1 номер панели получался 0x1xx и не
+         * совпадал ни с одной панелью). */
+        if (func_type == 18) spi_engine_npu_set_ena(spi_eng_npu, (com_dev_type)func_par[0], (ena_type)func_par[1]);
+        if (func_type == 19) spi_engine_npu_set_f_diap(spi_eng_npu, (pow_cntrl_type)func_par[0]);
+    }
 
-    //spi_engine_npu_pow_board_set_f_diap(spi_eng_npu_pow_board,  *(pow_cntrl_type*) func_par );
+#if NPU_CELL_NEW && NPU_BRIDGE_DEBUG
+    /* 22 — опрос моста SPI->I2C с экрана. Здесь, а не в обработчике
+     * UDP: движок один, и кадр из прерывания влез бы в середину
+     * обмена главного цикла. */
+    if (func_type == 22) spi_engine_bridge_probe();
+    /* 23 — обход восьми INA226 за мостом. */
+    if (func_type == 23) spi_engine_bridge_sweep();
+#endif
+
+    if (func_type == 21)
+    	{
+    	   /* Вторая тангента, CONT_TANG на другую плату. */
+    	   ppos_set_cont_tang(func_par[0] ? ENABLED : DISABLED);
+    	}
 
     if (func_type == 20)
     	{
     	   //printf("RRR");
-    	   ppos_set_tangenta(*(ena_type*) func_par);
+    	   /* func_par — массив u8 и между командами не обнуляется, а
+    	    * ena_type размером с int, поэтому разыменование через
+    	    * указатель на enum тянуло 4 байта и подмешивало хвосты
+    	    * прошлых команд. Берём один байт. */
+    	   ppos_set_tangenta(func_par[0] ? ENABLED : DISABLED);
     	}
 
 
-    //if (func_type == 20) spi_engine_npu_com_board_set_sd_on(spi_eng_npu_com_board);
-    //if (func_type == 21) spi_engine_npu_com_board_set_sd_off(spi_eng_npu_com_board);
-    //if (func_type == 22) spi_engine_npu_com_board_set_sd_status(spi_eng_npu_com_board);
+    //if (func_type == 20) spi_engine_npu_set_sd_on(spi_eng_npu);
+    /* 21 занят второй тангентой, см. выше */
+    //if (func_type == 22) spi_engine_npu_set_sd_status(spi_eng_npu);
 
 
 
@@ -3921,32 +3998,123 @@ for (int i = 0; i < size; i++) {
 
 
 
+/* Пересчёт RSSI из того, что отдала ПЛИС вместе с сегментом: сырой код
+ * делится на 4 и уменьшается на усиление AD9361, константа — поправка на
+ * тон 3500. Та же формула, что для секундного замера по SPI. */
+static float deb_rssi_dbm(const struct deb_chan_rx *r)
+{
+	float rssi = -(float)r->ad9361_rssi;
+	rssi /= 4.;
+	rssi -= (float)r->ad9361_gain;
+	return rssi + 13.9397;
+}
+
+/* Накопление секундной статистики канала по одной записи диагностики.
+ *
+ * Запись помечена номером канала: 0 — информационный, 1 — управления.
+ * Поля *_mean накапливают сумму, делить на cnt_seg должен получатель.
+ * Сбрасывает счёт не эта функция, а отправитель статуса: он ставит
+ * is_clr = 1, и следующая запись начинает секунду заново.
+ *
+ * Потери считаем по разрывам счётчика в первом байте сегмента. Счётчиков
+ * там два: старший бит выбирает поток (0 — данные, 1 — телеметрия), младшие
+ * семь бит — счётчик этого потока. Поэтому и хранить предыдущий номер нужно
+ * отдельно по каждому потоку, иначе на каждом переключении потока разрыв
+ * выглядел бы как потеря. Для этого и существует пара pr_seg/npr_seg;
+ * 0xFF означает «номера ещё не было». */
+static void stat_chan_accum(const struct deb_chan_rx *r)
+{
+	struct stat_rx_chan *st;
+
+	if (status_modem == NULL) return;
+
+	if      (r->cnan_id == 0) st = &status_modem->stat_rx;
+	else if (r->cnan_id == 1) st = &status_modem->stat_cntrl;
+	else                      return;
+
+	const bool     failed = (r->rs_dec_stat.inside.rs_dec_fail == 1);
+	const uint8_t  seq    =  r->cnt_seg & 0x7F;
+	const float    rssi   =  deb_rssi_dbm(r);
+	/* приоритетный поток — телеметрия (старший бит 1) */
+	uint8_t *prev = ((r->cnt_seg >> 7) & 1) ? &st->pr_seg : &st->npr_seg;
+
+	if (st->is_clr) {
+		st->is_clr   = 0;
+		st->pr_seg   = 0xFF;
+		st->npr_seg  = 0xFF;
+
+		st->cnt_lost_seg = 0;
+		st->cnt_err_seg  = failed ? 1 : 0;
+		st->cnt_seg      = failed ? 0 : 1;
+
+		st->cnt_vit_bit_err = r->vit_err_cnt;
+
+		st->gain_min = st->gain_max = r->ad9361_gain;
+		st->gain_mean = r->ad9361_gain;
+
+		st->rssi_min = st->rssi_max = st->rssi_mean = rssi;
+		st->mer_min  = st->mer_max  = st->mer_mean  = r->mer;
+
+		st->del_ack_mean = r->del_ack;
+	} else {
+		/* Разрыв ищем только по успешно принятым: у несобранного сегмента
+		 * номер недостоверен. */
+		if (!failed && *prev != 0xFF && ((*prev + 1) & 0x7F) != seq)
+			st->cnt_lost_seg++;
+
+		if (failed) st->cnt_err_seg++;
+		else        st->cnt_seg++;
+
+		st->cnt_vit_bit_err += r->vit_err_cnt;
+
+		if (st->gain_min > r->ad9361_gain) st->gain_min = r->ad9361_gain;
+		if (st->gain_max < r->ad9361_gain) st->gain_max = r->ad9361_gain;
+		st->gain_mean += r->ad9361_gain;
+
+		if (st->rssi_min > rssi) st->rssi_min = rssi;
+		if (st->rssi_max < rssi) st->rssi_max = rssi;
+		st->rssi_mean += rssi;
+
+		if (st->mer_min > r->mer) st->mer_min = r->mer;
+		if (st->mer_max < r->mer) st->mer_max = r->mer;
+		st->mer_mean += r->mer;
+
+		st->del_ack_mean += r->del_ack;
+	}
+
+	if (!failed) *prev = seq;
+}
+
 void send_deb_rx_append() {
 
 
 	if ( buf_deb_chan_rx_wad ==  buf_deb_chan_rx_rad) return;
 
+	const struct deb_chan_rx *rec = &buf_deb_chan_rx[buf_deb_chan_rx_rad];
+
+	/* Статистика считается всегда, отправка наружу — как получится. Если
+	 * привязать её к pbuf, то при нехватке буферов секунда недосчитается. */
+	stat_chan_accum(rec);
 
     struct pbuf *p = pbuf_alloc(PBUF_TRANSPORT, sizeof(struct deb_chan_rx), PBUF_RAM);
-    if (!p) {
+    if (p) {
+        memcpy((uint8_t*) p->payload, (uint8_t*) rec,  sizeof(struct deb_chan_rx));
+
+        err_t out = udp_sendto(status_pcb, p, &RemoteAddr, RemotePortRxDebAppend);
+
+        if (out != ERR_OK) {
+            xil_printf("Error udp_sendto debug_pcb: %d\n\r", out);
+        }
+
+        pbuf_free(p);
+    } else {
         xil_printf("Failed to allocate pbuf for buf_deb_chan_rx\n\r");
-        return;
     }
 
-    memcpy((uint8_t*) p->payload, (uint8_t*) &buf_deb_chan_rx[buf_deb_chan_rx_rad],  sizeof(struct deb_chan_rx));
-
+    /* Запись обработана в любом случае: если её не продвинуть, писатель
+     * кольца всё равно затрёт её, а статистика посчитает дважды. */
     buf_deb_chan_rx_rad++;
     if (buf_deb_chan_rx_rad == BUF_DEB_CHAN_RX_DEPTH) buf_deb_chan_rx_rad = 0;
-
-
-    err_t out = udp_sendto(status_pcb, p, &RemoteAddr, RemotePortRxDebAppend);
-
-
-    if (out != ERR_OK) {
-        xil_printf("Error udp_sendto debug_pcb: %d\n\r", out);
-    }
-
-    pbuf_free(p);
 
     return;
 
