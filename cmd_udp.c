@@ -1,16 +1,12 @@
-/* ===================================================================
- * cmd_udp.c -- UDP command handler (protocol 0x90 + legacy ucnt)
- *
- * Build with -DLOG_DEBUG=1 (basic) or -DLOG_DEBUG=2 (verbose)
- * to enable debug output.  Default: silent (LOG_DEBUG=0).
- * =================================================================== */
+/* UDP command handler: protocol 0x90 + legacy ucnt.
+ * -DLOG_DEBUG=1 or 2 for logs, default silent. */
 
 #include "cmd_udp.h"
 #include "radio_stream.h"
 #include "firewall.h"
 #include "watchdog.h"
 #include "platform_config.h" /* FW_ROLE_ID / FW_BUILD_STR */
-#include "device_config.h"   /* current_config, смена роли, device_request_save */
+#include "device_config.h"   /* current_config, role change */
 #include "lwip/pbuf.h"
 #include "lwip/udp.h"
 #include "lwip/ip_addr.h"
@@ -21,7 +17,6 @@
 #include <string.h>
 #include <stdbool.h>
 
-/* ---- external globals ---- */
 extern struct netif bridge_netif;
 extern struct netif port3_bridge;
 extern XLlFifo fifo;
@@ -31,14 +26,9 @@ extern struct no_os_spi_desc desc_tmp;
 extern struct ppos_tx tx_chan0;
 extern struct ppos_rx rx_chan0;
 extern struct ppos_par ppos;
-extern struct peleng pel; /* пеленг (правки коллеги) */
+extern struct peleng pel;
 
-/* ===================================================================
- *  Helpers
- * =================================================================== */
-
-/* Allocate a PBUF_TRANSPORT, fill header [0x90, sub], return payload ptr.
- * Returns NULL on allocation failure.  Caller must pbuf_free(). */
+/* Alloc pbuf, fill header [0x90, sub]. NULL on failure, caller frees. */
 static struct pbuf *resp_alloc(uint8_t sub, uint16_t total_len) {
     struct pbuf *pb = pbuf_alloc(PBUF_TRANSPORT, total_len, PBUF_RAM);
     if (pb) {
@@ -49,22 +39,14 @@ static struct pbuf *resp_alloc(uint8_t sub, uint16_t total_len) {
     return pb;
 }
 
-/* Send pbuf and free it.
- *
- * Если отправитель вне нашей подсети (напр. discovery-broadcast с чужого IP —
- * ПК в другой подсети на том же сегменте), юникастом ответить нельзя: маршрут
- * только через шлюз, которого нет, ARP не резолвится, ответ теряется.
- * В этом случае отвечаем limited broadcast (255.255.255.255) — он уходит
- * L2-броадкастом по тому же сегменту и доходит до ПК независимо от подсети. */
+/* Send and free. A sender outside our subnet cannot be reached by unicast
+ * (no route, ARP fails), so reply with a limited broadcast. */
 static void resp_send(struct udp_pcb *upcb, struct pbuf *pb,
                       const ip_addr_t *addr, u16_t port) {
     if (!ip4_addr_netcmp(ip_2_ip4(addr),
                          netif_ip4_addr(&bridge_netif),
                          netif_ip4_netmask(&bridge_netif))) {
-        /* Отправитель вне нашей подсети: юникастом маршрута нет. Отвечаем
-         * limited broadcast'ом ЯВНО через bridge_netif. Обычный
-         * udp_sendto(255.255.255.255) не годится: он ищет маршрут через
-         * netif_default, а в bridge-сборке он не выставлен → ответ не уходит. */
+        /* explicit netif: netif_default is unset in a bridge build */
         ip_addr_t bcast;
         IP_ADDR4(&bcast, 255, 255, 255, 255);
         udp_sendto_if(upcb, pb, &bcast, port, &bridge_netif);
@@ -74,7 +56,6 @@ static void resp_send(struct udp_pcb *upcb, struct pbuf *pb,
     pbuf_free(pb);
 }
 
-/* Serialize uint32 to buf, little-endian. */
 static inline void put_le32(uint8_t *buf, uint32_t v) {
     buf[0] = (v) & 0xFF;
     buf[1] = (v >> 8) & 0xFF;
@@ -82,13 +63,11 @@ static inline void put_le32(uint8_t *buf, uint32_t v) {
     buf[3] = (v >> 24) & 0xFF;
 }
 
-/* Serialize uint64 to buf, little-endian. */
 static inline void put_le64(uint8_t *buf, uint64_t v) {
     for (int i = 0; i < 8; i++)
         buf[i] = (v >> (i * 8)) & 0xFF;
 }
 
-/* Parse uint64 from buf, little-endian. */
 static inline uint64_t get_le64(const uint8_t *buf) {
     uint64_t v = 0;
     for (int i = 0; i < 8; i++)
@@ -96,21 +75,18 @@ static inline uint64_t get_le64(const uint8_t *buf) {
     return v;
 }
 
-/* Parse uint32 from buf, little-endian. */
 static inline uint32_t get_le32(const uint8_t *buf) {
     return (uint32_t)buf[0] | ((uint32_t)buf[1] << 8) | ((uint32_t)buf[2] << 16) | ((uint32_t)buf[3] << 24);
 }
 
-/* ===================================================================
- *  Protocol 0x90 handler
- * =================================================================== */
+/* ---- protocol 0x90 ---- */
 static void handle_proto_0x90(struct udp_pcb *upcb, uint8_t *data,
                               uint16_t len, const ip_addr_t *addr, u16_t port) {
     uint8_t sub = data[1];
     LOG1("[CMD] 0x90 sub=0x%02X len=%d\r\n", sub, len);
 
     switch (sub) {
-            /* ==================== WRITE commands ==================== */
+            /* ---- write ---- */
 
         case 0x02: { /* Set TX frequency */
             if (len != 10) {
@@ -241,7 +217,7 @@ static void handle_proto_0x90(struct udp_pcb *upcb, uint8_t *data,
             if (qt_mask & 0x01)
                 gpio_val |= (1 << 0);
 
-            /* bit 1: uf_tangenta (0=RX, 1=TX) -- from Qt bit3 */
+            /* bit 1: uf_tangenta (0=RX, 1=TX) */
             if (qt_mask & 0x08)
                 gpio_val |= (1 << 1);
 
@@ -347,22 +323,10 @@ static void handle_proto_0x90(struct udp_pcb *upcb, uint8_t *data,
             break;
         }
 
-        case 0x1A: { /* НПУ: измерители INA226 за мостом.
-                      *
-                      * Ответ 43 байта: [2] — счётчик обходов, дальше
-                      * восемь блоков по пять байт для адресов 0x40..0x47:
-                      *   +0      статус (0 — норма, иначе код I2CStat
-                      *           или 0xFE — ответил, но не INA226);
-                      *   +1..+2  регистр шины, младшим байтом вперёд;
-                      *   +3..+4  регистр шунта, знаковый, так же.
-                      *
-                      * Сырые регистры, без пересчёта: цена разряда
-                      * зависит от номинала шунта, и это знание живёт
-                      * в одном месте — на экране.
-                      *
-                      * Как и 0x19, отдаёт ПРЕДЫДУЩИЙ обход и ставит в
-                      * очередь новый: обход идёт около 7 мс и в обработчике
-                      * UDP ему не место. */
+        case 0x1A: { /* NPU: INA226 meters behind the bridge. 43 bytes: [2] sweep
+                      * counter, then 8 blocks of 5 for addresses 0x40..0x47:
+                      * status, bus reg LE, shunt reg LE signed. Raw regs.
+                      * Returns the PREVIOUS sweep and queues a new one, ~7 ms. */
 #if NPU_CELL_NEW && NPU_BRIDGE_DEBUG
             {
                 extern u8 func_type;
@@ -389,19 +353,9 @@ static void handle_proto_0x90(struct udp_pcb *upcb, uint8_t *data,
             break;
         }
 
-        case 0x19: { /* НПУ: короткий кадр на мост SC18IS604.
-                      *
-                      * Ответ 15 байт: [2..9] — восемь байт ответа на
-                      * команду 0xFE, [10] — регистр I2CClock,
-                      * [11..14] — счётчик опросов, младшим байтом
-                      * вперёд.
-                      *
-                      * ⬆ Отдаём результат ПРЕДЫДУЩЕГО запроса, а
-                      * новый только ставим в очередь: движок один, и
-                      * обмен прямо отсюда влез бы в середину обмена
-                      * главного цикла. При повторении команды это
-                      * просто отставание на один шаг; счётчик в ответе
-                      * показывает, что опросы действительно идут. */
+        case 0x19: { /* NPU: short frame to the SC18IS604 bridge. 15 bytes:
+                      * [2..9] reply to 0xFE, [10] I2CClock, [11..14] poll
+                      * counter LE. Returns the PREVIOUS result, queues a new one. */
 #if NPU_CELL_NEW && NPU_BRIDGE_DEBUG
             {
                 extern u8 func_type;
@@ -426,18 +380,9 @@ static void handle_proto_0x90(struct udp_pcb *upcb, uint8_t *data,
             break;
         }
 
-        case 0x18: { /* НПУ: прочитанное состояние выходов ячейки.
-                      * Ответ 6 байт: [2]=ena (бит на подрешётку, порядок
-                      * com_dev_type), [3]=код преселектора,
-                      * [4]=регистр 0x04 (D0=1 — ячейка вышла из
-                      * shutdown и отвечает), [5]=резерв.
-                      *
-                      * Отдаём кэш из статусного цикла, а не читаем SPI
-                      * здесь: движок один, и обмен из обработчика UDP
-                      * влез бы в середину обмена главного цикла. Кэш
-                      * обновляется раз в секунду, а состояние выходов
-                      * меняется только нашими же командами, так что
-                      * свежести хватает. */
+        case 0x18: { /* NPU: cached output state. 6 bytes: [2]=ena bits
+                      * (com_dev_type order), [3]=preselector, [4]=reg 0x04
+                      * (D0=1: out of shutdown), [5]=rsv. Cache from the 1 Hz poll. */
             extern struct npu_outputs npu_out;
             struct pbuf *pb = resp_alloc(0x18, 6);
             if (!pb) break;
@@ -452,7 +397,7 @@ static void handle_proto_0x90(struct udp_pcb *upcb, uint8_t *data,
             break;
         }
 
-            /* ==================== READ commands ==================== */
+            /* ---- read ---- */
 
         case 0x10: { /* Read TX frequency */
             if (len != 2) break;
@@ -512,7 +457,7 @@ static void handle_proto_0x90(struct udp_pcb *upcb, uint8_t *data,
             break;
         }
 
-            /* ==================== Diagnostics ==================== */
+            /* ---- diagnostics ---- */
 
         case 0x20: { /* Statistics (radio_stream + lwIP) */
 #define STATS20_LEN 78
@@ -568,10 +513,8 @@ static void handle_proto_0x90(struct udp_pcb *upcb, uint8_t *data,
         }
 
         case 0x22: { /* Segmentation test -- send N frames */
-            /* 1. Вытолкнуть bridge-остаток из tx_ring (иначе чужие pkt_id
-             *    вылетят после тестовых → ложный gap).
-             * 2. Сбросить ID-счётчики RX-парсера: первый пакет после
-             *    bridge-трафика не даст gap с тестовыми фреймами. */
+            /* Flush the bridge tail and reset the RX parser ids, else foreign
+             * pkt_ids follow the test frames and look like a gap. */
             radio_tx_periodic_flush();
             radio_stream_reset_rx_ids();
 
@@ -645,9 +588,8 @@ static void handle_proto_0x90(struct udp_pcb *upcb, uint8_t *data,
             break;
         }
 
-        case 0x23: { /* Queue telemetry: ring occupancy + air rate + FIFO depth.
-                      * Read-only snapshot used to compare buffering between
-                      * builds; ring_size identifies which build answered. */
+        case 0x23: { /* Queue telemetry: ring occupancy, air rate, FIFO depth.
+                      * ring_size tells which build answered. */
 #define QSTAT_LEN 78
             struct pbuf *pb = resp_alloc(0x23, QSTAT_LEN);
             if (!pb) break;
@@ -686,10 +628,8 @@ static void handle_proto_0x90(struct udp_pcb *upcb, uint8_t *data,
             break;
         }
 
-        case 0x26: { /* Чтение регистров ppos ПРЯМО ИЗ AXI (не теневой копии):
-                      * [2..25] = creg0..creg5, по 4 байта little-endian.
-                      * Нужно, чтобы видеть, что реально стоит в железе:
-                      * slot_dur в creg5, num_seg в creg4. */
+        case 0x26: { /* ppos regs straight from AXI, not the shadow copy:
+                      * [2..25] = creg0..creg5 LE. Shows what the HW really has. */
 #define CREGS_LEN 26
             struct pbuf *pb = resp_alloc(0x26, CREGS_LEN);
             if (!pb) break;
@@ -702,8 +642,8 @@ static void handle_proto_0x90(struct udp_pcb *upcb, uint8_t *data,
             break;
         }
 
-        case 0x25: { /* Диагностика приёма: счётчики форматов кадров + первые
-                      * 16 байт последнего блока. [2..21]=5 uint32, [22..37]=байты */
+        case 0x25: { /* RX diag: frame format counters + first 16 bytes of the
+                      * last block. [2..21] = 5 uint32, [22..37] = bytes. */
 #define RXDIAG_LEN 38
             struct pbuf *pb = resp_alloc(0x25, RXDIAG_LEN);
             if (!pb) break;
@@ -813,8 +753,8 @@ static void handle_proto_0x90(struct udp_pcb *upcb, uint8_t *data,
             break;
         }
 
-        case 0x48: { /* Firmware info: [2]=role_id (1=MASTER,2=SLAVE,0=мисконфиг)
-                      *                [3]=rsv [4..]=ASCII версия\0 */
+        case 0x48: { /* Firmware info: [2]=role_id (1=MASTER, 2=SLAVE, 0=misconfig)
+                      * [3]=rsv, [4..]=ASCII version, zero terminated */
             const char *ver = FW_BUILD_STR;
             uint16_t vlen = (uint16_t)strlen(ver);
             if (vlen > 200) vlen = 200;
@@ -829,8 +769,8 @@ static void handle_proto_0x90(struct udp_pcb *upcb, uint8_t *data,
             break;
         }
 
-        case 0x4C: { /* WDT вкл/выкл. len=2 GET / len=3 SET (payload[2]: 0=выкл).
-                      * Response [2]=состояние (1=включён). */
+        case 0x4C: { /* WDT on/off. len=2 GET, len=3 SET (payload[2]: 0=off).
+                      * Response [2]=state, 1=on. */
             if (len >= 3) wdt_set_enabled(data[2] ? 1 : 0);
             struct pbuf *pb = resp_alloc(0x4C, 3);
             if (!pb) break;
@@ -845,9 +785,7 @@ static void handle_proto_0x90(struct udp_pcb *upcb, uint8_t *data,
     }
 }
 
-/* ===================================================================
- *  Legacy protocol handler (ucnt[2] + cmd[1] + payload)
- * =================================================================== */
+/* ---- legacy protocol: ucnt[2] + cmd[1] + payload ---- */
 static void handle_legacy(struct udp_pcb *upcb, uint8_t *data,
                           uint16_t len, const ip_addr_t *addr, u16_t port) {
     uint16_t ucnt_rx = ((uint16_t)data[0] << 8) | data[1];
@@ -888,11 +826,10 @@ static void handle_legacy(struct udp_pcb *upcb, uint8_t *data,
             break;
         }
 
-        case 0x07: { /* Set IP (15 байт).
-                      * DEPRECATED: НЕ имеет target — широковещательный 0x07 сменит
-                      * IP ВСЕМ модемам сразу. Для адресной смены по device_id
-                      * использовать 0xA0 group=4 subcmd=0x01 (set-net). Оставлено
-                      * для юникаст-совместимости со старым ПО. */
+        case 0x07: { /* Set IP, 15 bytes.
+                      * DEPRECATED: no target, so a broadcast 0x07 changes the IP
+                      * of every modem at once. For one device by id use
+                      * 0xA0 group=5 subcmd=0x01. Kept for old software. */
             if (len < 15) break;
             uint32_t ip_val = ((uint32_t)data[3] << 24) | ((uint32_t)data[4] << 16) | ((uint32_t)data[5] << 8) | ((uint32_t)data[6]);
             uint32_t nm_val = ((uint32_t)data[7] << 24) | ((uint32_t)data[8] << 16) | ((uint32_t)data[9] << 8) | ((uint32_t)data[10]);
@@ -906,8 +843,8 @@ static void handle_legacy(struct udp_pcb *upcb, uint8_t *data,
             IP4_ADDR(&new_gw, (gw_val >> 24) & 0xFF, (gw_val >> 16) & 0xFF,
                      (gw_val >> 8) & 0xFF, gw_val & 0xFF);
 
-            /* Отправляем ACK ДО смены IP — пакет уходит со старого адреса.
-             * Формат ответа: ucnt[2] + 0x07 + ok[1] + new_ip[4] = 8 байт */
+            /* ACK before the IP changes, so it leaves from the old address.
+             * Reply: ucnt[2] + 0x07 + ok[1] + new_ip[4] = 8 bytes */
             struct pbuf *ack07 = pbuf_alloc(PBUF_TRANSPORT, 8, PBUF_RAM);
             if (ack07) {
                 uint8_t *r = (uint8_t *)ack07->payload;
@@ -940,9 +877,7 @@ static void handle_legacy(struct udp_pcb *upcb, uint8_t *data,
     }
 }
 
-/* ===================================================================
- *  Main entry point -- UDP callback
- * =================================================================== */
+/* ---- UDP callback ---- */
 void cmd_udp_callback(void *arg, struct udp_pcb *upcb,
                       struct pbuf *p, const ip_addr_t *addr, u16_t port) {
     if (p == NULL)
@@ -976,10 +911,8 @@ static void handle_creg_exch(struct udp_pcb *upcb, uint8_t *data,
     uint8_t type = data[3];
     LOG1("[CMD] 0xA0 group=0x%02X creg=0x%02X type=0x%02X len=%d\r\n", group, creg, type, len);
 
-    /* Группы 0..4 (cregs + пеленг) читают 32-битное слово из data[4..7] — им нужно
-     * ровно 8 байт. Диспетчер пропускает 0xA0 с len>=4, поэтому короткий пакет
-     * отсекаем здесь, чтобы не читать за границей. Группа 5 (device config) —
-     * переменной длины, свои проверки внутри. */
+    /* Groups 0..4 read a 32-bit word from data[4..7], so they need 8 bytes.
+     * Group 5 is variable length and checks its own. */
     if (group <= 4 && len < 8) {
         LOG1("[CMD] 0xA0 g%d: too short (len=%d, need 8)\r\n", group, len);
         return;
@@ -988,17 +921,15 @@ static void handle_creg_exch(struct udp_pcb *upcb, uint8_t *data,
     if (group == 0) // ppos
     {
         switch (type) {
-            case 0x01: /* wr_flash: применить регистр как set + запросить сохранение (ниже) */
+            case 0x01: /* wr_flash: apply as set, save requested below */
             case 0x00: { /* Set cregs */
 
                 u32 offset = creg;
                 u32 word = (u32)data[7] | ((u32)data[6] << 8) |
                            ((u32)data[5] << 16) | ((u32)data[4] << 24);
 
-                /* Здесь было безусловное `ppos.creg2.word = word;` — любая
-                 * запись ЛЮБОГО регистра затирала теневую копию creg2, где
-                 * лежат GPIO, тангента, питание УФ и диапазон частот Fdiap.
-                 * В AXI мусор уходил при следующем ppos_set_tangenta(). */
+                /* An unconditional ppos.creg2.word = word here used to wipe the
+                 * creg2 shadow (GPIO, tangent, UF power, Fdiap) on any write. */
 
                 if (offset == 2) {
                     ppos.creg2.word = word;
@@ -1023,7 +954,7 @@ static void handle_creg_exch(struct udp_pcb *upcb, uint8_t *data,
     if (group == 1) // tx_chan0
     {
         switch (type) {
-            case 0x01: /* wr_flash: применить регистр как set + запросить сохранение (ниже) */
+            case 0x01: /* wr_flash: apply as set, save requested below */
             case 0x00: { /* Set cregs */
 
                 u32 offset = creg;
@@ -1068,7 +999,7 @@ static void handle_creg_exch(struct udp_pcb *upcb, uint8_t *data,
     if (group == 2) // rx_chan0
     {
         switch (type) {
-            case 0x01: /* wr_flash: применить регистр как set + запросить сохранение (ниже) */
+            case 0x01: /* wr_flash: apply as set, save requested below */
             case 0x00: { /* Set cregs */
 
                 u32 offset = creg;
@@ -1077,7 +1008,7 @@ static void handle_creg_exch(struct udp_pcb *upcb, uint8_t *data,
 
                 if (offset == 0) {
                     rx_chan0.creg0.word = word;
-                    /* новая платформа: приём не останавливаем при записи creg0 */
+                    /* new platform: do not stop RX when writing creg0 */
                     //rx_chan0.creg0.inside.run = 0;
                     AXI_CNTRL_REG_WRITE(AXI_CNTRL_REG_BASEADDR + RX_CHAN0_PAR_OFFSET, offset, rx_chan0.creg0.word);
                 }
@@ -1099,7 +1030,7 @@ static void handle_creg_exch(struct udp_pcb *upcb, uint8_t *data,
     if (group == 3) //
     {
         switch (type) {
-            case 0x01: /* wr_flash: применить регистр как set + запросить сохранение (ниже) */
+            case 0x01: /* wr_flash: apply as set, save requested below */
             case 0x00: { /* Set cregs */
 
                 u32 offset = creg;
@@ -1122,12 +1053,11 @@ static void handle_creg_exch(struct udp_pcb *upcb, uint8_t *data,
         }
     }
 
-    if (group == 4) /* пеленг (правки коллеги): параметры импульсного сигнала.
-                     * Формат как у cregs: A0 04 <creg> 00 <word[4] BE>.
-                     * Пишется в AXI_CNTRL_REG1_BASEADDR + PELENG_PAR_OFFSET. */
+    if (group == 4) /* peleng: pulse signal params. Format as cregs:
+                     * A0 04 <creg> 00 <word[4] BE>. */
     {
         switch (type) {
-            case 0x01: /* wr_flash: применить регистр как set + запросить сохранение (ниже) */
+            case 0x01: /* wr_flash: apply as set, save requested below */
             case 0x00: { /* Set cregs */
 
                 u32 offset = creg;
@@ -1154,24 +1084,22 @@ static void handle_creg_exch(struct udp_pcb *upcb, uint8_t *data,
         }
     }
 
-    /* op=1 (wr_flash) в creg-панели: регистр выше уже применён (case 0x01→0x00),
-     * теперь запросить сохранение ВСЕГО профиля в QSPI. Реальная запись — в main
-     * loop (там снимок живых регистров: radio_params_capture + cfg_flash_save). */
+    /* wr_flash: the register is already applied above, now ask to save the whole
+     * profile. The real write happens in the main loop. */
     if (group <= 4 && type == 0x01) {
         device_request_save();
         LOG1("[CMD] 0xA0 g%d creg=%d: wr_flash -> save profile requested\r\n", group, creg);
     }
 
-    if (group == 5) /* device config (унификация): переменная длина.
-                     * ВНИМАНИЕ: group=4 занят пеленгом (правки коллеги),
-                     * поэтому device-config живёт на group=5.
-                     * Формат: A0 05 <subcmd> <tidHi> <tidLo> <payload...>
-                     * tid (target device_id): 0 = всем, иначе только совпавшему. */
+    if (group == 5) /* device config, variable length. group=4 is taken by
+                     * peleng, so this lives on 5.
+                     * A0 05 <subcmd> <tidHi> <tidLo> <payload...>
+                     * tid = target device_id, 0 = all. */
     {
         uint8_t subcmd = data[2];
 
-        /* get config — без target, отвечаем всегда.
-         * Ответ: 10 id[2] role ip[4] peer[4] mac1[6] mac3[6] bridge[6] = 30 байт */
+        /* get config: no target, always answer.
+         * 10 id[2] role ip[4] peer[4] mac1[6] mac3[6] bridge[6] = 30 bytes */
         if (subcmd == 0x10) {
             struct pbuf *resp = pbuf_alloc(PBUF_TRANSPORT, 32, PBUF_RAM);
             if (!resp) return;
@@ -1199,7 +1127,6 @@ static void handle_creg_exch(struct udp_pcb *upcb, uint8_t *data,
             return;
         }
 
-        /* Команды изменения состояния — с проверкой target_id. */
         if (len < 5) {
             LOG1("[CMD 0xA0 g5] too short (len=%d)\r\n", len);
             return;
@@ -1213,12 +1140,12 @@ static void handle_creg_exch(struct udp_pcb *upcb, uint8_t *data,
 
         struct device_config nc = current_config;
         int do_reinit = 0;
-        int do_ack    = 0;   /* команды без reinit (save/erase) — тоже шлём ACK */
+        int do_ack    = 0;   /* save/erase: no reinit, but still ACK */
 
         switch (subcmd) {
-            case 0x00: /* set role: payload[0] = role (0=master,1=slave) */
+            case 0x00: /* set role: payload[0] (0=master, 1=slave) */
                 if (len < 6 || data[5] > 1) break;
-                config_set_defaults(&nc, (role_t)data[5]); /* роль => дефолты роли */
+                config_set_defaults(&nc, (role_t)data[5]);
                 do_reinit = 1;
                 LOG1("[CMD 0xA0 g5] set role=%d\r\n", data[5]);
                 break;
@@ -1233,7 +1160,7 @@ static void handle_creg_exch(struct udp_pcb *upcb, uint8_t *data,
                      nc.ip[0], nc.ip[1], nc.ip[2], nc.ip[3]);
                 break;
 
-            case 0x02: /* set MAC (все 3): mac1[6] mac3[6] bridge[6] */
+            case 0x02: /* set MAC, all 3: mac1[6] mac3[6] bridge[6] */
                 if (len < 23) break;
                 memcpy(nc.mac1, data + 5, 6);
                 memcpy(nc.mac3, data + 11, 6);
@@ -1242,13 +1169,13 @@ static void handle_creg_exch(struct udp_pcb *upcb, uint8_t *data,
                 LOG1("[CMD 0xA0 g5] set MAC (all 3)\r\n");
                 break;
 
-            case 0x20: /* save: сохранить текущий конфиг во флэш QSPI (persist) */
+            case 0x20: /* save to QSPI */
                 device_request_save();
                 do_ack = 1;
                 LOG1("[CMD 0xA0 g5] save to flash requested\r\n");
                 break;
 
-            case 0x21: /* factory reset: стереть флэш-конфиг (вернутся дефолты) */
+            case 0x21: /* factory reset: erase the flash config */
                 device_request_erase();
                 do_ack = 1;
                 LOG1("[CMD 0xA0 g5] factory reset (erase flash) requested\r\n");
@@ -1260,8 +1187,8 @@ static void handle_creg_exch(struct udp_pcb *upcb, uint8_t *data,
         }
 
         if (do_reinit || do_ack) {
-            /* ACK (для reinit — уйдёт со СТАРОГО адреса, до применения):
-             * A0 05 <subcmd> tidHi tidLo 01 */
+            /* ACK: A0 05 <subcmd> tidHi tidLo 01. For reinit it leaves from
+             * the OLD address, before the change is applied. */
             struct pbuf *ack = pbuf_alloc(PBUF_TRANSPORT, 6, PBUF_RAM);
             if (ack) {
                 uint8_t *r = (uint8_t *)ack->payload;

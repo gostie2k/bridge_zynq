@@ -52,6 +52,26 @@ typedef enum {
 } ena_type;
 
 
+
+typedef enum {
+    TANG_RX           = 0,  /* вручную: приём    */
+    TANG_TX           = 1,  /* вручную: передача */
+    TANG_AUTO         = 2,  /* авто, ПРОТИВОФАЗА — штатная работа   */
+    TANG_AUTO_INPHASE = 3   /* авто, В ФАЗЕ — измерительный режим   */
+} tang_mode_t;
+
+
+static inline tang_mode_t tang_mode_from_par(uint8_t par)
+{
+    switch (par) {
+    case 0:  return TANG_RX;
+    case 1:  return TANG_TX;
+    case 3:  return TANG_AUTO_INPHASE;
+    default: return TANG_AUTO;
+    }
+}
+
+
 typedef enum {
     TX_PANEL_1 = 0,
     TX_PANEL_2 = 1,
@@ -125,13 +145,7 @@ struct deb_chan_rx
 
 
 
-/* Статистика одного радиоканала за секунду. Одна и та же структура на оба
- * канала: информационный (параметры из rx_chan0) и управления (из tx_chan0).
- * Накапливается в send_deb_rx_append() по записям диагностики ПЛИС, уходит в
- * статусном пакете раз в секунду и после отправки сбрасывается — отправитель
- * ставит is_clr = 1, и следующая запись начинает счёт заново.
- *
- * Поля *_mean — сумма, а не среднее: делить на cnt_seg должен получатель. */
+
 #pragma pack(push,1)
 struct stat_rx_chan
 {
@@ -206,29 +220,12 @@ struct stat_npu
 
 
 #pragma pack(push,1)
-/* Состояние выходов ячейки НПУ, ПРОЧИТАННОЕ с MAX7301, а не теневая
- * копия того, что мы ей посылали. Нужно именно это: команды 0x16/0x17
- * обратной связи не имеют, и до сих пор «ПРД1 ВКЛ» на экране означало
- * лишь то, что по кнопке щёлкнули.
- *
- * Читаются те же одиночные регистры портов (0x20 + номер), в которые
- * пишут set_ena и set_f_diap. Групповые регистры (0x40 + номер) дали бы
- * меньше кадров, но у них спорная адресация: протокол сопряжения
- * называет 0x40 группой «P4..P7», а по даташиту 0x40 — это восемь
- * портов начиная с P0, которых у AAX+ нет. Читать ровно тот регистр,
- * в который писали, — единственная проверяемая привязка. */
+
 struct npu_outputs
 {
-	/* Бит на подрешётку, порядок com_dev_type:
-	 * D0 ПРД1, D1 ПРД2, D2..D5 ПРМ1..ПРМ4. 1 — питание подано. */
+	
 	uint8_t ena;
-	/* Код pow_cntrl_type, собранный из портов преселектора. */
 	uint8_t f_diap;
-	/* Регистр 0x04 как прочитан: D0 = 1 — ячейка вышла из shutdown.
-	 * Заодно признак живости: единицу туда положила инициализация, и
-	 * если она читается обратно, значит и SPI, и микросхема работают.
-	 * Ноль или 0xFF — ячейка не отвечает, остальные поля смысла не
-	 * имеют. */
 	uint8_t cfg;
 	uint8_t reserve;
 };
@@ -465,10 +462,9 @@ struct ppos_par
 	  struct
 	   {
 	     //from bit#0....down to bit#31
-	     /* Rx1B/Tx1B/Rx2B/Tx2B были нужны только AntSDR и из ПЛИС убраны
-	      * (knk_krt_bvp 791799c). Освободившиеся четыре бита забраны под
-	      * расширение GPIOnR_TYPE, поэтому вся карта creg2 сдвинулась на
-	      * 4 бита вниз. Прежние поля — в закомментированном creg4 ниже. */
+	     /* Rx1B/Tx1B/Rx2B/Tx2B
+	      * (knk_krt_bvp 791799c).
+	      */
 		  uint32_t GPIO1R:1;
 		  uint32_t GPIO2R:1;
 		  uint32_t GPIO3R:1;
@@ -481,18 +477,13 @@ struct ppos_par
 		  uint32_t GPIO4R_DIR:1;
 		  uint32_t GPIO5R_DIR:1;
 		  uint32_t GPIO6R_DIR:1;
-		  /* Профиль распиновки шести линий AB_GPIO1R..6R внутри ppos_dsp:
-		   * 0 — вручную из GPIOnR/GPIOnR_DIR, иначе зашитая в ПЛИС схема
-		   * под конкретное изделие. Перечень значений — в modem_init(). */
+
 		  uint32_t GPIOnR_TYPE:4;
 		  uint32_t Tang:1;
 		  uint32_t Tang_avt:1;
 		  uint32_t Pit:1;
 		  uint32_t Fdiap:3; //air: 0 - 3.4-3.6, !0 - 3.7-3.9
-		  /* CONT_TANG — вторая тангента, отдельная линия на другую плату.
-		   * Первая осталась за Tang, они независимы. 1 — передача, 0 —
-		   * приём. _avt — линию ведёт автомат ПЛИС по тактам слота, сам
-		   * бит NPU_CTX_nCRX тогда не смотрится. */
+
 		  uint32_t NPU_CTX_nCRX:1;
 		  uint32_t NPU_CTX_nCRX_avt:1;
 
@@ -650,23 +641,17 @@ struct ppos_par
 
 
 void spi_engine_ad9361_init(struct no_os_spi_desc**  spi_eng);
-/* Ячейка распределения питания и управления ЕРВА.468349.020: одна
- * MAX7301 на единственном chip select, см. шапку в modem.c */
+
 void spi_engine_npu_init(struct no_os_spi_desc**  spi_eng);
 
 void spi_engine_npu_get_status(struct no_os_spi_desc*  spi_eng, struct stat_npu* status_npu);
 void spi_engine_npu_set_ena(struct no_os_spi_desc*  spi_eng, com_dev_type com_dev,  ena_type ena);
 void spi_engine_npu_set_f_diap(struct no_os_spi_desc*  spi_eng, pow_cntrl_type typ);
-/* Чтение выходов ячейки. Кадров много (по два на регистр), поэтому
- * вызывается из главного цикла рядом с get_status, а не из обработчика
- * UDP: движок SPI один, и два обмена вперемешку испортили бы оба. */
+
 void spi_engine_npu_get_outputs(struct no_os_spi_desc*  spi_eng, struct npu_outputs* out);
 
 #if NPU_CELL_NEW && NPU_BRIDGE_DEBUG
-/* Короткий опрос моста SC18IS604 по запросу — для проверки нового chip
- * select с экрана. Кадр тот же, что в начале bridge_debug(): команда
- * 0xFE («дай строку версии») не трогает шину I2C вообще, поэтому
- * проверяет ровно SPI до моста и ничего больше. */
+
 struct bridge_probe {
     uint8_t  ver[8];    /* первые 8 байт ответа на 0xFE          */
     uint8_t  i2cclk;    /* регистр I2CClock, читается следом     */
@@ -675,9 +660,7 @@ struct bridge_probe {
 extern struct bridge_probe bridge_probe_last;
 void spi_engine_bridge_probe(void);
 
-/* Обход восьми INA226 за мостом. Заполняется в главном цикле по запросу
- * с экрана, отдаётся кэшем: полный обход — 24 транзакции I2C, около 7 мс,
- * делать его в обработчике UDP нельзя. */
+
 struct npu_power {
     uint8_t  cnt;        /* счётчик обходов, для контроля свежести  */
     uint8_t  stat[8];    /* 0 — норма, иначе код I2CStat или 0xFE
@@ -688,9 +671,8 @@ struct npu_power {
 extern struct npu_power npu_pwr;
 void spi_engine_bridge_sweep(void);
 #endif
-void ppos_set_tangenta(ena_type ena);
-/* Вторая тангента: creg2.NPU_CTX_nCRX (CONT_TANG), линия на другую плату. */
-void ppos_set_cont_tang(ena_type ena);
+void ppos_set_tangenta(tang_mode_t mode);
+void ppos_set_cont_tang(tang_mode_t mode);
 
 
 

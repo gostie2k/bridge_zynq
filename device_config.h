@@ -11,38 +11,24 @@ typedef enum {
 
 struct device_config {
     uint8_t  role;            /* role_t */
-
-    uint16_t device_id;       /* уникальный ID устройства (для адресных broadcast-команд).
-                               * Временно: master=1, slave=2. Позже — из flash UID. */
-
-    uint8_t  ip[4];           /* свой IP (bridge_netif) */
+    uint16_t device_id;       /* for addressed broadcast cmds */
+    uint8_t  ip[4];           /* own IP (bridge_netif) */
     uint8_t  netmask[4];
     uint8_t  gateway[4];
-    uint8_t  peer_ip[4];      /* адрес пира (RemoteAddr) */
-
+    uint8_t  peer_ip[4];      /* RemoteAddr */
     uint8_t  mac1[6];         /* GEM, port1 */
     uint8_t  mac3[6];         /* radio, vport3 */
-    uint8_t  bridge_mac[6];   /* MAC bridge_netif */
+    uint8_t  bridge_mac[6];
 };
 
-/* Единственный экземпляр конфига, действующий в рантайме. */
 extern struct device_config current_config;
 
-/* Заполнить cfg дефолтами для заданной роли. */
 void config_set_defaults(struct device_config *cfg, role_t role);
+void config_init_defaults_from_build(void);   /* role from IS_MASTER/IS_SLAVE */
 
-/* Заполнить current_config дефолтами, роль берётся из IS_MASTER/IS_SLAVE. */
-void config_init_defaults_from_build(void);
-
-/* Запросить применение нового конфига (смена роли/сети).
- * Безопасно вызывать из UDP-колбэка: сам reinit отложен до main loop. */
+/* Safe from a UDP callback: the work is deferred to the main loop */
 void device_request_reinit(const struct device_config *new_cfg);
-
-/* Запросить сохранение текущего конфига во флэш QSPI (переживает перезагрузку).
- * Безопасно из UDP-колбэка: запись отложена до main loop (блокирует ~1 с). */
-void device_request_save(void);
-
-/* Запросить сброс конфига во флэш к заводским (стереть обе копии). */
+void device_request_save(void);               /* blocks ~1 s when it runs */
 void device_request_erase(void);
 
 #endif /* DEVICE_CONFIG_H_ */

@@ -1,21 +1,5 @@
-/******************************************************************************
-* Copyright (C) 2023 Advanced Micro Devices, Inc. All Rights Reserved.
-* SPDX-License-Identifier: MIT
-******************************************************************************/
-/*
- * helloworld.c: simple test application
- *
- * This application configures UART 16550 to baud rate 9600.
- * PS7 UART (Zynq) is not initialized by this application, since
- * bootrom/bsp configures it to baud rate 115200
- *
- * ------------------------------------------------
- * | UART TYPE   BAUD RATE                        |
- * ------------------------------------------------
- *   uartns550   9600
- *   uartlite    Configurable only in HW design
- *   ps7_uart    115200 (configured by bootrom/bsp)
- */
+/* Copyright (C) 2023 Advanced Micro Devices, Inc. All Rights Reserved.
+ * SPDX-License-Identifier: MIT */
 
 
 #include "cmd_udp.h"
@@ -34,8 +18,8 @@
 #include "xil_printf.h"
 #include "watchdog.h"
 #include "platform_config.h"   /* FW_VERSION / WDT_ENABLED_DEFAULT */
-#include "cfg_flash.h"         /* хранение конфига в QSPI (унификация, Фаза 3) */
-#include "radio_params.h"      /* радиопараметры профиля (current_radio) */
+#include "cfg_flash.h"         /* config in QSPI */
+#include "radio_params.h"      /* current_radio */
 
 #include "vid_buf.h"
 #include "cmd_buf.h"
@@ -70,7 +54,6 @@
 
 
 
-//struct circular_buffer_a;
 vid_buf*   buf_vid;
 vid_out_buf* vid_out;
 struct vid_pkt* zero_vid_pkt;
@@ -84,7 +67,7 @@ struct cmd_pkt* zero_cmd_pkt;
 struct ppos_tx tx_chan0;
 struct ppos_rx rx_chan0;
 struct ppos_par ppos;
-struct peleng pel;   /* пеленг (правки коллеги), управление: 0xA0 group=4 */
+struct peleng pel;   /* peleng, control: 0xA0 group=4 */
 
 
 uint32_t mean_dist;
@@ -95,12 +78,9 @@ extern uint32_t buf_deb_chan_rx_wad;
 extern uint32_t buf_deb_chan_rx_rad;
 
 
-//u32 temp_rx_words[47]; // Буфер для чтения 47 слов (188 байт) из FIFO
-//    uint8_t temp_rx_block[188]; // Буфер для байтов
-//    int rx_word_idx;
 
-#define PL_TX_BLOCK_SIZE  188   // Размер блока для radio_input_block
-#define PL_RX_MAX_SIZE    256   // Максимальный размер RX (с запасом)
+#define PL_TX_BLOCK_SIZE  188
+#define PL_RX_MAX_SIZE    256
 
 u32     temp_rx_words[PL_RX_MAX_SIZE / 4];
 uint8_t temp_rx_block[PL_RX_MAX_SIZE];
@@ -109,20 +89,20 @@ int     rx_word_idx;
 u16 deb_cnt_br=0;
 u16 deb_cnt_rf=0;
 
-/* --- from _1: command source tracking --- */
+
 cmd_source_t current_cmd_source = CMD_SRC_UART;
 struct udp_pcb *global_reply_pcb = NULL;
 ip_addr_t last_client_ip;
 u16_t last_client_port;
 
-/* --- from _1: SPI engine descriptors --- */
-struct no_os_spi_desc*  spi_eng_ad9361;
-struct no_os_spi_desc*  spi_eng_npu;
 
-/* Прочитанное состояние выходов ячейки НПУ. Обновляется раз в секунду в
- * статусном цикле ниже, отдаётся по запросу 0x90 0x18 из cmd_udp.c.
- * Через кэш, а не чтением прямо в обработчике UDP: движок SPI один, и
- * обмен из обработчика влез бы в середину обмена главного цикла. */
+struct no_os_spi_desc*  spi_eng_ad9361;
+/* Explicit NULL, not .bss zeroing: with NPU_CELL_PRESENT = 0 every skip
+ * of a cell access rests on this pointer. */
+struct no_os_spi_desc*  spi_eng_npu = NULL;
+
+/* NPU output state, refreshed once a second, served to 0x90 0x18.
+ * Cached because there is one SPI engine. */
 struct npu_outputs npu_out;
 
 u8_t sys_hours = 0;
@@ -143,7 +123,6 @@ u8 fpga_regs[43] = {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
 u8 pream_new[24] = {0x00, 0x00, 0x00,    0x28, 0x94, 0x4a, 0x25, 0x22, 0x4a, 0x48, 0xa4, 0x4a, 0x49, 0x12, 0x51, 0x44, 0xa2, 0x51, 0x29, 0x12, 0x52,    0x24, 0x92, 0x49};
 
 
-// exterens from error_tracker.c
 extern void err_reset();
 extern void err_inc_recv_eth();
 extern void err_inc_send_fifo();
@@ -154,7 +133,6 @@ extern void err_group_buff_created();
 extern void err_check();
 extern unsigned long err_last_packet();
 extern void err_inc_recv_fifo_wrong();
-//extern void init_buf_a_header(capacity_buffer* _buff);
 extern void init_platform();
 extern void *no_os_calloc(size_t nitems, size_t size);
 extern void platform_enable_interrupts();
@@ -162,7 +140,6 @@ extern void usleep(ULONG useconds);
 extern void sleep(u32 seconds);
 
 extern void bridgeif_fdb_age(void *fdb_ptr);
-//extern struct netif bridge_netif;
 
 extern unsigned long val_recv_eth;
 extern unsigned long val_send_fifo;
@@ -173,19 +150,12 @@ extern unsigned long val_buff_write;
 extern unsigned long val_buff_read;
 extern unsigned long val_group_buf;
 
-//#define MAX_BUFFER_SIZE 6
-//#define EXPECTED_PACKET_VID_SIZE 1212
-//#define EXPECTED_PACKET_TEL_SIZE 1008
-//#define EXPECTED_PACKET_RES_SIZE 5
-//#define REQUEST_INTERVAL_MS 5000
-//#define RESPONSE_TIMEOUT_MS 100
 
 #define FIFO_READ_DELAY 20
 #define FIFO_RX_DEPTH 24
 #define FIFO_TX_DEPTH 32
 
 
-//#define XLWIP_CONFIG_INCLUDE_GEM
 
 typedef enum {
     WAITING_FOR_RESET_ACK,
@@ -195,9 +165,9 @@ typedef enum {
 
 static XUartPs Uart1_Ps;		/* The instance of the UART Driver */
 static XGpioPs Gpio_Ps;           /* The instance of the GPIO Driver */
-static XScuGic ScuGic; // Interrupt Controller Driver
+static XScuGic ScuGic;
 XLlFifo fifo;
-XLlFifo fifo_npr_tx;   /* вторая передающая: данные */
+XLlFifo fifo_npr_tx;   /* data TX */
 XLlFifo fifo_deb;
 static void IntrHandler(void *CallBackRef, u32 Bank, u32 Status);
 static void exec_func(bool *func_start, u8 func_type, u8 *func_par);
@@ -209,24 +179,18 @@ void lwip_init();
 static void send_vid_packet_sized(uint8_t* vid, uint16_t size);
 
 
-//void send_request();
-//void send_reset_packet();
 void recv_callback(void *arg, struct udp_pcb *upcb, struct pbuf *p, const ip_addr_t *addr, u16_t port);
 unsigned int swap32(unsigned int value);
 unsigned short swap16(unsigned short value);
 int init_tx_rx_fifo();
 int init_npr_tx_fifo();
 int init_deb_fifo();
-//void send_debug_fifo_krt_gr_dat();
-//void send_debug_fifo_krt_gr_dat_empty();
-//void send_debug_rx_check(uint8_t ch_tx, uint8_t ch_rx);
 
 bool is_run = false;
 
 uint8_t *bufff;
 u32 bufff_cnt=0;
 
-//u32 rx_buf[2250];
 
 u8 func_type;
 u8 func_par[16];
@@ -238,10 +202,8 @@ SystemState systemState = SENDING_REQUESTS;
 
 #ifdef BRIDGE
  struct netif port1_bridge;
- //, port2_bridge,
  struct netif port3_bridge;
  struct netif bridge_netif;
- //struct netif udp_netif2;
 #endif
 
 #ifndef BRIDGE
@@ -255,23 +217,18 @@ struct udp_pcb *recv_pcb;
 struct udp_pcb *debug_pcb;
 struct udp_pcb *send_rx_data;
 
-//u16_t RemotePort = 8;
 u16_t RemotePortRx = 5018;
-//u16_t RemotePortTxDebug = 28;
-//u16_t RemotePortRxDebug = 58;
 u16_t RemotePortDeb = 5078;
 u16_t RemotePortRxDebAppend = 5098;
 
 u16_t RemotePortStatus = 5007;
 
 
-//------MERGE--------------
 struct udp_pcb *cmd_udp_pcb;
 struct udp_pcb *status_pcb;
-u16_t CmdPort = 60012;  // порт для приема команд управления
+u16_t CmdPort = 60012;
 
 u16_t StatusPort = 5008;
-//------MERGE--------------
 
 
 
@@ -280,74 +237,14 @@ struct ip4_addr RemoteAddr;
 
 
 
-//#pragma pack(push,1)
-//struct krt_gr_dat
-//{
-//	uint8_t head[102];
-//	uint8_t tel[1008];
-//	uint8_t vid_0[1269];
-//	uint8_t vid_1[1269];
-//	uint8_t vid_2[1269];
-//	uint8_t vid_3[1269];
-//	uint8_t vid_4[1269];
-//	uint8_t anal[62];
-//	uint8_t code[1483];
-//	uint8_t gr_size;
-//	uint16_t gr_cnt;
-//	uint8_t tel_is_val;
-//	uint8_t vid_0_is_val;
-//	uint8_t vid_1_is_val;
-//	uint8_t vid_2_is_val;
-//	uint8_t vid_3_is_val;
-//	uint8_t vid_4_is_val;
-//	uint8_t anal_is_val;
-//	uint8_t rx_is_val;
-//	uint8_t tmp;
-//};
-//#pragma pack(pop)
-
-
-
-//#pragma pack(push,1)
-//struct cmd_pkt
-//{
-//	uint8_t head[29];
-//	uint8_t data[1518];
-//	uint8_t code[253];
-//	uint8_t pkt_size;
-//	uint8_t is_val;
-//	uint8_t rx_is_val;
-//	uint8_t tmp;
-//};
-//#pragma pack(pop)
 
 
 
 
-//#pragma pack(push,1)
-//struct cmd_vid
-//{
-//	uint16_t  dcnt;
-//	uint8_t   cmd;
-//	uint16_t  cnt_gr;
-//	uint8_t   type;
-//	uint16_t  size;
-//	uint8_t   cnt_pkt;
-//	uint8_t   *dat_vid;
-//};
-//#pragma pack(pop)
 
-//#pragma pack(push,1)
-//struct cmd_tel
-//{
-//	uint16_t  dcnt;
-//	uint8_t   cmd;
-//	uint16_t  cnt_gr;
-//	uint8_t   type;
-//	uint16_t  size;
-//	uint8_t   *dat_tel;
-//};
-//#pragma pack(pop)
+
+
+
 
 
 XTime cur_time, mem_time ,last_response_time, tmp_time, max_tmp_time =0;
@@ -355,13 +252,10 @@ XTime cur_time, mem_time ,last_response_time, tmp_time, max_tmp_time =0;
 uint16_t ucnt = 0;
 uint16_t cnt_gr = 0;
 uint16_t cnt_gr_start_sent = FIFO_READ_DELAY;
-//uint8_t first_send=1;
 
 uint8_t wad=0;
 uint8_t rad=0;
 
-//struct krt_gr_dat fifo_krt_gr_dat[FIFO_TX_DEPTH];
-//struct krt_gr_dat fifo_rx_buf[FIFO_RX_DEPTH];
 
 struct vid_pkt fifo_krt_gr_dat[FIFO_TX_DEPTH];
 struct vid_pkt fifo_rx_buf[FIFO_RX_DEPTH];
@@ -370,12 +264,6 @@ uint8_t fifo_rx_wad=0;
 uint8_t fifo_rx_rad=0;
 
 
-//uint16_t check_buf(struct krt_gr_dat* fifo_krt_gr_dat );
-//void clear_val_buf(struct krt_gr_dat* fifo_krt_gr_dat , uint8_t ad);
-//bool is_val_buf(struct krt_gr_dat* fifo_krt_gr_dat , uint8_t ad);
-//void init_buf_header(struct krt_gr_dat* fifo_krt_gr_dat);
-//void fifo_rx_buf_check(struct krt_gr_dat* rx_buf, uint8_t* rx_wad);
-//void fifo_rx_buf_write(struct krt_gr_dat* rx_buf,uint8_t* rx_rad);
 
 
 void send_deb_rx_append();
@@ -384,20 +272,16 @@ void send_deb_rx_append();
 void fifo_rx_buf_check(struct vid_pkt* rx_buf, uint8_t* rx_wad);
 void fifo_rx_buf_write(struct vid_pkt* rx_buf,uint8_t* rx_rad,  uint8_t* cmd_rx_buf);
 
-//vid_pkt
 
 
 
-//void send_tel_packet(uint8_t* tel);
-//void send_vid_packet(uint8_t* vid);
 void fifo_deb_read();
 uint32_t deb_pkt_r = 0;
 uint32_t deb_pkt_w = 0;
 uint32_t deb_pkt_buf[4096];
 void send_deb();
-//void send_modem_status(struct stat_modem* status);
 
-/* --- from _1: new functions --- */
+
 void send_cmd();
 void send_response_byte(XUartPs *uart_ptr, u8 byte);
 void process_cmd_3bytes(uint8_t *data, XUartPs *uart_ptr, struct no_os_spi_desc *spi_desc_ptr, bool *func_start, u8 *func_type, u8 *func_par);
@@ -411,15 +295,6 @@ void process_cmd_3bytes(uint8_t *data, XUartPs *uart_ptr, struct no_os_spi_desc 
 #define SPI_CS              0
 
 
-//#define MAX_BUFFER_SIZE 6
-//#define EXPECTED_PACKET_SIZE 1269
-//#define REQUEST_INTERVAL_MS 5000
-//#define RESPONSE_TIMEOUT_MS 100
-
-//typedef enum {
-//    WAITING_FOR_RESET_ACK,
-//    SENDING_REQUESTS
-//} SystemState;
 
 
 
@@ -1187,8 +1062,7 @@ if (  ((Status&0x20000000) == 0x20000000)&&(Bank == 3))
 u32_t sys_now(void) {
     XTime tCur;
     XTime_GetTime(&tCur);
-    // Преобразуем такты таймера (counts) в миллисекунды
-    // Частота таймера в Zynq обычно COUNTS_PER_SECOND = CPU_3x2x_CLK / 2
+    /* timer counts to ms; COUNTS_PER_SECOND = CPU_3x2x_CLK / 2 */
     return (u32_t)(tCur / (COUNTS_PER_SECOND / 1000));
 }
 
@@ -1208,22 +1082,20 @@ struct stat_modem* status_modem;
 bool led_tog =true;
 
 
-/* ===================================================================
- *  Унификация: рантайм-смена роли (Фаза 2)
- * =================================================================== */
+ /* runtime role change */
 
-/* Отложенный reinit: команда смены роли ставит флаг, сам reinit
- * выполняется в main loop (нельзя освобождать cmd_udp_pcb внутри его
- * собственного recv-колбэка). */
+
+/* Deferred reinit: the command sets a flag, the work happens in the main
+ * loop. cmd_udp_pcb cannot be freed inside its own recv callback. */
 static volatile bool        g_cfg_reinit_pending = false;
 static struct device_config g_cfg_pending;
 
-/* Отложенное сохранение/стирание конфига во флэш QSPI. Реальная запись —
- * в main loop (стирание сектора блокирует ~1 с; нельзя в UDP-колбэке). */
+/* Deferred config save and erase: the real write is in the main loop,
+ * a sector erase blocks for about a second. */
 static volatile bool        g_cfg_save_pending  = false;
 static volatile bool        g_cfg_erase_pending = false;
 
-/* (Пере)создание UDP-листенеров. Вызывается из main() и из device_reinit(). */
+/* (Re)create the UDP listeners. Called from main() and device_reinit(). */
 static void init_udp_listeners(void)
 {
     status_pcb = udp_new(); // send status & debug pkts
@@ -1248,17 +1120,13 @@ static void init_udp_listeners(void)
     udp_bind_netif(debug_pcb, &bridge_netif);
 }
 
-/* "Мягкий" reinit: меняем сетевую идентичность (IP + MAC) и пересоздаём
- * UDP-листенеры под новый IP. GEM/netif НЕ сносим (xemac_add повторно
- * течёт памятью и реинициализирует GEM; промискуитет уже включён, так что
- * для приёма MAC в железе не важен, а исходящий src-MAC берётся из hwaddr). */
-/* Записать PL-бит выбора роли (ppos.creg3.MasterNSlave) под текущую роль.
- * По имени поля (аналогично AD9361_TXnRX: 1=TX) считаем 1 = MASTER, 0 = SLAVE.
- * ⚠ Если PL трактует бит наоборот — поменять условие здесь. Прочие биты creg3
- * (AD9361_ENABLE/TXnRX и т.д.) сохраняются. */
-/* Перестроить creg3 под текущую роль — как в modem_init (MASTER: MasterNSlave=1,
- * SLAVE: 0; полярность подтверждена modem.c). Задаёт весь набор role/TDMA-битов,
- * а не только MasterNSlave: иначе PL-движок TDMA не согласуется с новой ролью. */
+/* Soft reinit: change IP and MACs, recreate the UDP listeners. GEM and netif
+ * stay: the GEM is promiscuous, so the MAC in HW does not matter, and the
+ * outgoing src MAC comes from hwaddr. */
+/* PL role bit (ppos.creg3.MasterNSlave): 1 = MASTER, 0 = SLAVE.
+ * ⚠ If the PL reads it the other way, flip the condition here. */
+/* Rebuild the whole creg3 for the role, not just MasterNSlave, else the PL
+ * TDMA engine does not match the new role. */
 static void apply_role_to_pl(void)
 {
     ppos.creg3.word = 0;
@@ -1280,22 +1148,22 @@ static int device_reinit(const struct device_config *new_cfg)
                new_cfg->role, new_cfg->ip[0], new_cfg->ip[1],
                new_cfg->ip[2], new_cfg->ip[3]);
 
-    /* 1. Заморозить data path */
+    /* 1. freeze the data path */
     is_run = false;
 
-    /* 2. Снести UDP-листенеры (привязаны к старому IP) */
+    /* 2. drop the UDP listeners, they are bound to the old IP */
     if (status_pcb)   { udp_remove(status_pcb);   status_pcb   = NULL; }
     if (cmd_udp_pcb)  { udp_remove(cmd_udp_pcb);   cmd_udp_pcb  = NULL; }
     if (recv_pcb)     { udp_remove(recv_pcb);      recv_pcb     = NULL; }
     if (send_rx_data) { udp_remove(send_rx_data);  send_rx_data = NULL; }
     if (debug_pcb)    { udp_remove(debug_pcb);     debug_pcb    = NULL; }
 
-    /* 3. Применить новый конфиг */
+    /* 3. apply the new config */
     current_config = *new_cfg;
     IP4_ADDR(&RemoteAddr, current_config.peer_ip[0], current_config.peer_ip[1],
                           current_config.peer_ip[2], current_config.peer_ip[3]);
 
-    /* 4. IP + MAC'и in-place */
+    /* 4. IP and MACs in place */
     {
         ip4_addr_t ip, nm, gw;
         IP4_ADDR(&ip, current_config.ip[0], current_config.ip[1],
@@ -1311,29 +1179,26 @@ static int device_reinit(const struct device_config *new_cfg)
     memcpy(bridge_netif.hwaddr,    current_config.bridge_mac, 6);
     memcpy(bridge_data.ethaddr.addr, current_config.bridge_mac, 6);
 
-    /* 4.5. Смена роли рестартует PL TDMA-движок (creg3: MasterNSlave/ENABLE_AUTO).
-     * Флипать это на живом радио нельзя — PL десинхронизируется. Поэтому:
-     *   1) гасим TDMA-движок (ENABLE_AUTO=0),
-     *   2) сбрасываем FIFO (дропаем «на лету» блоки старой роли),
-     *   3) перестраиваем creg3 под новую роль (ENABLE_AUTO=1 обратно). */
+    /* 4.5. A role change restarts the PL TDMA engine, and flipping that on a
+     * live radio desyncs the PL. So: stop the engine, reset the FIFO,
+     * then rebuild creg3 for the new role. */
     ppos.creg3.inside.ENABLE_AUTO = 0;
     AXI_CNTRL_REG_WRITE(AXI_CNTRL_REG_BASEADDR, 12, ppos.creg3.word);
     XLlFifo_IntClear(&fifo, 0xFFFFFFFF);
     XLlFifo_Reset(&fifo);
     apply_role_to_pl();
 
-    /* 5. Пересоздать листенеры под новый IP */
+    /* 5. recreate the listeners for the new IP */
     init_udp_listeners();
 
-    /* 6. Чистый старт счётчиков radio_stream под новую роль */
+    /* 6. clean start for the radio_stream counters */
     radio_stream_reset_stats();
     radio_stream_reset_rx_ids();
 
-    /* 7. Запуститься */
+    /* 7. go */
     is_run = true;
 
-    /* Разослать gratuitous ARP — чтобы соседи и коммутатор сразу обновили
-     * IP->MAC (иначе держат старый MAC до устаревания записи). */
+    /* gratuitous ARP, so neighbours refresh IP->MAC right away */
     etharp_gratuitous(&bridge_netif);
 
     xil_printf("[CFG] reinit done: role=%d id=%d\r\n",
@@ -1341,21 +1206,20 @@ static int device_reinit(const struct device_config *new_cfg)
     return 0;
 }
 
-/* Запросить смену конфига из любого контекста (в т.ч. UDP-колбэка).
- * Реальный reinit отложен до main loop. */
+/* Request a config change from any context; the reinit is deferred. */
 void device_request_reinit(const struct device_config *new_cfg)
 {
     g_cfg_pending        = *new_cfg;
     g_cfg_reinit_pending = true;
 }
 
-/* Сохранить текущий конфиг во флэш — отложено до main loop. */
+/* Save the config to flash, deferred to the main loop. */
 void device_request_save(void)
 {
     g_cfg_save_pending = true;
 }
 
-/* Сброс к заводским (стереть флэш-конфиг) — отложено до main loop. */
+/* Factory reset: erase the flash config, deferred to the main loop. */
 void device_request_erase(void)
 {
     g_cfg_erase_pending = true;
@@ -1364,8 +1228,8 @@ void device_request_erase(void)
 
 int main()
 {
-	/* Прочитать SLCR.REBOOT_STATUS до любого ресета регистров — покажет, был ли
-	 * последний ресет от watchdog (crash_section). */
+	/* Read SLCR.REBOOT_STATUS before any register reset: shows whether the
+	 * last reset came from the watchdog. */
 	wdt_capture_reboot_status();
 
 	status_modem = 	stat_modem_init();
@@ -1567,24 +1431,19 @@ int main()
 
 
 
-     /* Профиль GPIO нужен до первого обмена с ячейкой по SPI. Был сырой
-      * 0x00010000: под прежней картой creg2 это GPIOnR_TYPE = 1, а под
-      * новой тот же бит 16 — это Tang. Значения профилей — в
-      * комментарии в modem_init().
-      *
-      * Профиль берётся из NPU_GPIO_PROFILE, а не числом: инициализация
-      * MAX7301 идёт следующей строкой, и переключить профиль из GUI
-      * потом уже поздно — микросхема так и останется в shutdown. */
+     /* The GPIO profile must be set before the first SPI exchange with the
+      * cell: the MAX7301 init is the next line, and switching the profile
+      * from the GUI later is too late. */
      #ifdef  IS_BORT
      AXI_CNTRL_REG_WRITE(AXI_CNTRL_REG_BASEADDR, 8, (u32)(2u << 12));
      #else
      AXI_CNTRL_REG_WRITE(AXI_CNTRL_REG_BASEADDR, 8, (u32)(NPU_GPIO_PROFILE << 12));
      #endif
 
-     /* На борту ячейки НПУ нет — дескриптор не создаём вовсе. Обращения
-      * к нему защищены проверкой на NULL в exec_func и в статусном
-      * цикле: движок разыменовывает desc->extra без проверки. */
-     #ifndef IS_BORT
+     /* The NPU cell may be absent. Then no descriptor is created and no frame
+      * goes out on the cell bus. Calls are guarded by NULL checks.
+      * ⚠ AD9361 is unaffected, it has its own engine. */
+     #if NPU_CELL_PRESENT
      spi_engine_npu_init(&spi_eng_npu);
      #endif
 
@@ -1713,33 +1572,36 @@ int main()
 #endif
 
 
-  d[0]=0x80; d[1]=0xfb ;d[2]=0x48;
-  //no_os_spi_write_and_read_11bit(&desc_tmp,&d[0],1);
-  no_os_spi_write_and_read(&desc_tmp,&d[0],3);
+/* SPI transport to AD9361. The seven registers below are the whole manual
+ * AGC tuning; they go over the bus AD9361_SPI_VIA_ENGINE selects. */
+#if AD9361_SPI_VIA_ENGINE
+#define AD9361_REG_WR(buf)  no_os_spi_write_and_read(&desc_tmp, (buf), 3)
+#else
+#define AD9361_REG_WR(buf)  no_os_spi_write_and_read_11bit(&desc_tmp, (buf), 1)
+#endif
 
-  d[0]=0x81;d[1]=0x10;d[2]=0x00;
-  //no_os_spi_write_and_read_11bit(&desc_tmp,&d[0],1);
-  no_os_spi_write_and_read(&desc_tmp,&d[0],3);
+  d[0]=0x80; d[1]=0xfb ;d[2]=0x48;   /* REG_AGC_CONFIG_2 */
+  AD9361_REG_WR(&d[0]);
 
-  d[0]=0x81;d[1]=0x06;d[2]=0x6F;
-  //no_os_spi_write_and_read_11bit(&desc_tmp,&d[0],1);
-  no_os_spi_write_and_read(&desc_tmp,&d[0],3);
+  d[0]=0x81;d[1]=0x10;d[2]=0x00;   /* REG_FAST_CONFIG_1 */
+  AD9361_REG_WR(&d[0]);
 
-  d[0]=0x81;d[1]=0x5C;d[2]=0x72;
-  //no_os_spi_write_and_read_11bit(&desc_tmp,&d[0],1);
-  no_os_spi_write_and_read(&desc_tmp,&d[0],3);
+  d[0]=0x81;d[1]=0x06;d[2]=0x6F;   /* REG_GAIN_STP_CONFIG_2 */
+  AD9361_REG_WR(&d[0]);
 
-  d[0]=0x81;d[1]=0x07;d[2]=0x1f;
-  //no_os_spi_write_and_read_11bit(&desc_tmp,&d[0],1);
-  no_os_spi_write_and_read(&desc_tmp,&d[0],3);
+  d[0]=0x81;d[1]=0x5C;d[2]=0x72;   /* REG_DEC_POWER_MEASURE_DURATION_0 */
+  AD9361_REG_WR(&d[0]);
 
-  d[0]=0x81;d[1]=0x08;d[2]=0x25;
-  //no_os_spi_write_and_read_11bit(&desc_tmp,&d[0],1);
-  no_os_spi_write_and_read(&desc_tmp,&d[0],3);
+  d[0]=0x81;d[1]=0x07;d[2]=0x1f;   /* REG_SMALL_LMT_OVERLOAD_THRESH */
+  AD9361_REG_WR(&d[0]);
 
-  d[0]=0x81;d[1]=0x12;d[2]=0x45;
-  //no_os_spi_write_and_read_11bit(&desc_tmp,&d[0],1);
-  no_os_spi_write_and_read(&desc_tmp,&d[0],3);
+  d[0]=0x81;d[1]=0x08;d[2]=0x25;   /* REG_LARGE_LMT_OVERLOAD_THRESH */
+  AD9361_REG_WR(&d[0]);
+
+  d[0]=0x81;d[1]=0x12;d[2]=0x45;   /* REG_FAST_ENERGY_LOST_THRESH */
+  AD9361_REG_WR(&d[0]);
+
+#undef AD9361_REG_WR
 
 
 
@@ -1950,31 +1812,25 @@ modem_init();
 //platform_enable_interrupts();
 
 
-    /* Сид рантайм-конфига из IS_MASTER/IS_SLAVE (Фаза 1 унификации).
-     * Должно быть до net_init() и до использования RemoteAddr. */
+    /* Seed the runtime config from IS_MASTER/IS_SLAVE, before net_init() */
     config_init_defaults_from_build();
 
-    /* Радиопараметры: дефолт = снимок ЖИВЫХ регистров после modem_init() (он уже
-     * отработал выше), затем — перекрытие из QSPI-профиля, если он есть. */
+    /* Radio defaults = snapshot of the live registers after modem_init() */
     radio_params_capture(&current_radio);
 
-    /* Фаза 3: перекрыть дефолты сохранённым ПРОФИЛЕМ из QSPI (сеть + радио), если
-     * есть валидный. Должно быть до apply_role_to_pl()/RemoteAddr/net_init(), чтобы
-     * роль/IP/MAC поднялись сразу из флэш. modem_init() уже отработал выше (baseline),
-     * поэтому применённый профиль перекрывает зашитые радио-дефолты. Нет валидной
-     * копии — остаются дефолты. */
+    /* Override the defaults with the saved QSPI profile if a valid one exists.
+     * Must run before apply_role_to_pl(), RemoteAddr and net_init(). */
     if (cfg_flash_init() == 0) {
         struct device_config loaded;
         struct radio_params  loaded_radio;
         if (cfg_flash_load(&loaded, &loaded_radio)) {
             current_config = loaded;
             current_radio  = loaded_radio;
-            radio_params_apply(&current_radio);   /* частоты/аттенюация/пеленг из профиля */
+            radio_params_apply(&current_radio);
         }
     }
 
-    /* Выставить PL-бит роли под стартовую роль (creg3 с AD9361-битами уже
-     * записан выше, здесь только уточняем MasterNSlave). */
+    /* Set the PL role bit for the starting role */
     apply_role_to_pl();
 
     IP4_ADDR(&RemoteAddr, current_config.peer_ip[0], current_config.peer_ip[1],
@@ -2027,11 +1883,10 @@ lwip_init();
     platform_enable_interrupts();
     is_run = true;
 
-    /* FW-баннер (версия/роль) — UART уже поднят. */
+    /* FW banner, the UART is up by now */
     xil_printf("\r\n[FW] %s\r\n", FW_BUILD_STR);
 
-    /* Watchdog запускаем последним — все init'ы выполнены. GIC инициализирован
-     * в platform_setup_interrupts. Старт по WDT_ENABLED_DEFAULT; тумблер 0x90 0x4C. */
+    /* Watchdog last, after every init. Starts per WDT_ENABLED_DEFAULT. */
     if (wdt_init((struct XScuGic *)&ScuGic) == 0) {
         if (WDT_ENABLED_DEFAULT) wdt_start();
     }
@@ -2039,26 +1894,26 @@ lwip_init();
     while(1)
     {
     	wdt_hb_main();
-    	wdt_section_mark(WDT_SEC_OTHER);   /* по умолчанию — переопределяется ниже */
+    	wdt_section_mark(WDT_SEC_OTHER);
 
-    	/* Отложенная смена роли/конфига (запрошена из UDP-колбэка) */
+    	/* deferred role or config change */
     	if (g_cfg_reinit_pending) {
     		g_cfg_reinit_pending = false;
     		wdt_kick();
     		device_reinit(&g_cfg_pending);
     	}
 
-    	/* Отложенное сохранение конфига во флэш QSPI (блокирует ~1 с — гасим WDT).
-    	 * Пишем ПОСЛЕ reinit, чтобы во флэш ушёл уже применённый current_config. */
+    	/* Deferred config save; blocks ~1 s, so the WDT is stopped. Written
+    	 * after the reinit, so the applied config is what lands in flash. */
     	if (g_cfg_save_pending) {
     		g_cfg_save_pending = false;
     		wdt_kick();
-    		radio_params_capture(&current_radio);   /* снимок живых регистров (creg-панель) */
+    		radio_params_capture(&current_radio);
     		cfg_flash_save(&current_config, &current_radio);
     		wdt_kick();
     	}
 
-    	/* Отложенный сброс к заводским (стереть флэш-конфиг). */
+    	/* deferred factory reset */
     	if (g_cfg_erase_pending) {
     		g_cfg_erase_pending = false;
     		wdt_kick();
@@ -2093,8 +1948,7 @@ lwip_init();
     //if ( rx_chan0.creg0.inside.pkt_len == 544  ) drain_rx_fifo();
 
 
-         /* Информационный канал — из своей FIFO в мост; канал управления —
-          * только за диагностикой, сегменты оттуда в мост не идут. */
+         /* data channel to the bridge; control channel for diag only */
          drain_rx_fifo(&fifo);
          drain_cntrl_tx_fifo(&fifo_npr_tx);
 
@@ -2213,7 +2067,7 @@ lwip_init();
     	wdt_section_mark(WDT_SEC_POST_LWIP);
     	wdt_hb_lwip();
 
-        // Обработка таймеров (ARP, TCP, DHCP)
+        /* ARP, TCP, DHCP timers */
         //sys_check_timeouts();
 
 
@@ -2460,8 +2314,7 @@ lwip_init();
 
 
 
-   		     /* Мощность и усиление по SPI раз в секунду. Снимаем ДО отправки,
-   		      * чтобы в пакет попало свежее значение, а не прошлой секунды. */
+   		     /* Power and gain over SPI once a second, taken before the send */
    		     uint8_t d[] = {0x01,0x61,0x00,0x00};
    		     no_os_spi_write_and_read(&desc_tmp,&d[0],3);
    		     //xil_printf("%02X ", d[2]);
@@ -2553,10 +2406,8 @@ lwip_init();
 
 
 
-    			 /* Параметры каналов и расписания — в тот же пакет: получателю
-    			  * иначе не с чем сопоставить накопленные счётчики. Канал
-    			  * управления описывается параметрами tx_chan0, информационный
-    			  * — rx_chan0. */
+    			 /* Channel and schedule params in the same packet, else the
+    			  * receiver has nothing to match the counters against. */
     			 status_modem->stat_rx.mod     = rx_chan0.creg0.inside.mod;
     			 status_modem->stat_rx.code    = rx_chan0.creg0.inside.code;
 
@@ -2573,18 +2424,14 @@ lwip_init();
 
 
 
-    	     /* Индикаторы перегрева и мощности передающих подрешёток
-    	      * снимаются по SPI тем же темпом, что и остальной статус:
-    	      * иначе поле status_npu уходит в пакет нулями, потому что
-    	      * func_type = 17 никто по UDP не вызывает. */
+    	     /* Panel indicators at the same rate as the rest of the status,
+    	      * else status_npu goes out as zeros. */
     	     #if NPU_STATUS_POLL
     	     if (spi_eng_npu) {
     	     spi_engine_npu_get_status(spi_eng_npu, &status_modem->status_npu);
 
-    	     /* Заодно перечитываем выходы — питание подрешёток и
-    	      * преселектор. Это восемнадцать кадров против двух, но если
-    	      * ячейки нет, чтение обрывается на первом же регистре:
-    	      * get_outputs проверяет 0x04 и выходит. */
+    	     /* Outputs too: eighteen frames against two, but with no cell the
+    	      * read stops at the first register. */
     	     spi_engine_npu_get_outputs(spi_eng_npu, &npu_out);
     	     }
     	     #endif
@@ -2592,8 +2439,7 @@ lwip_init();
     	     wdt_section_mark(WDT_SEC_STATUS_SEND);
     	     send_modem_status(status_pcb, status_modem);
 
-    	     /* Счёт пошёл заново: следующая запись диагностики перезапишет
-    	      * минимумы и максимумы, а не продолжит прошлую секунду. */
+    	     /* Start over: the next diag write resets min and max */
     	     status_modem->stat_rx.is_clr    = 1;
     	     status_modem->stat_cntrl.is_clr = 1;
 
@@ -2653,9 +2499,8 @@ lwip_init();
 
     	 send_deb_rx_append();
 
-    	 /* Сторожевой таймер: гладим в конце каждой итерации главного цикла.
-    	  * Должен стоять последним — если что-то выше зависнет, кормления
-    	  * не случится и WDT перезагрузит PS. */
+    	 /* Watchdog: kick at the end of each iteration. Must be last, so a hang
+    	  * above means no kick and the PS reboots. */
     	 wdt_kick();
     }
 
@@ -3551,50 +3396,51 @@ static void exec_func(bool *func_start, u8 func_type, u8 *func_par)
 
     if (func_type == 16) print_dynamic_fdb(&bridge_netif);
 
-    /* Дескриптор проверяем: на борту ячейки нет и он остаётся NULL, а
-     * spi_engine_write_and_read сразу берёт desc->extra без проверки,
-     * так что одна команда НПУ по UDP уронила бы прошивку. Проверка
-     * runtime, а не #ifdef: она же прикроет случай, когда ячейка есть,
-     * но spi_engine_init не смог выделить дескриптор. */
+    /* Check the descriptor: with no cell it stays NULL, and
+     * spi_engine_write_and_read takes desc->extra without checking, so one
+     * NPU command over UDP would crash the firmware. Runtime check, not
+     * #ifdef: it also covers a failed spi_engine_init. */
     if (spi_eng_npu) {
         if (func_type == 17) spi_engine_npu_get_status(spi_eng_npu, &status_modem->status_npu);
-        /* Параметры берём побайтно: func_par — массив u8, а com_dev_type и
-         * pow_cntrl_type размером с int, поэтому разыменование через
-         * указатель на enum тянуло 4 байта и подмешивало соседние
-         * параметры (при ena = 1 номер панели получался 0x1xx и не
-         * совпадал ни с одной панелью). */
+        /* Byte by byte: func_par is u8[], while com_dev_type and
+         * pow_cntrl_type are int sized, so a pointer to enum pulled 4 bytes
+         * and mixed in neighbouring params. */
         if (func_type == 18) spi_engine_npu_set_ena(spi_eng_npu, (com_dev_type)func_par[0], (ena_type)func_par[1]);
         if (func_type == 19) spi_engine_npu_set_f_diap(spi_eng_npu, (pow_cntrl_type)func_par[0]);
     }
 
 #if NPU_CELL_NEW && NPU_BRIDGE_DEBUG
-    /* 22 — опрос моста SPI->I2C с экрана. Здесь, а не в обработчике
-     * UDP: движок один, и кадр из прерывания влез бы в середину
-     * обмена главного цикла. */
+    /* 22: bridge poll from the GUI. Here, not in the UDP handler: there is
+     * one engine, and a frame from an ISR would cut into the main loop. */
     if (func_type == 22) spi_engine_bridge_probe();
-    /* 23 — обход восьми INA226 за мостом. */
+    /* 23: sweep of the eight INA226 behind the bridge */
     if (func_type == 23) spi_engine_bridge_sweep();
 #endif
 
     if (func_type == 21)
     	{
-    	   /* Вторая тангента, CONT_TANG на другую плату. */
-    	   ppos_set_cont_tang(func_par[0] ? ENABLED : DISABLED);
+    	   /* Second tangent, CONT_TANG to the other board.
+    	    * func_par[0]: 0 = RX, 1 = TX, 2 = give it to the PL.
+    	    * Garbage counts as auto: that is the normal mode. */
+    	   ppos_set_cont_tang(tang_mode_from_par(func_par[0]));
     	}
 
     if (func_type == 20)
     	{
     	   //printf("RRR");
-    	   /* func_par — массив u8 и между командами не обнуляется, а
-    	    * ena_type размером с int, поэтому разыменование через
-    	    * указатель на enum тянуло 4 байта и подмешивало хвосты
-    	    * прошлых команд. Берём один байт. */
-    	   ppos_set_tangenta(func_par[0] ? ENABLED : DISABLED);
+    	   /* func_par is u8[] and is not cleared between commands, while the
+    	    * enum is int sized, so a pointer to enum pulled 4 bytes and mixed
+    	    * in tails of earlier commands. Take one byte.
+    	    * func_par[0]: 0 = RX, 1 = TX, 2 = give it to the PL.
+    	    * ⚠ 0 and 1 take the line out of auto, and per-slot RX/TX switching
+    	    * stops until a 2 arrives or the modem reboots. That is intended,
+    	    * but panels that only send 0/1 cannot undo it. */
+    	   ppos_set_tangenta(tang_mode_from_par(func_par[0]));
     	}
 
 
     //if (func_type == 20) spi_engine_npu_set_sd_on(spi_eng_npu);
-    /* 21 занят второй тангентой, см. выше */
+    /* 21 is the second tangent, see above */
     //if (func_type == 22) spi_engine_npu_set_sd_status(spi_eng_npu);
 
 
@@ -3818,9 +3664,9 @@ int init_npr_tx_fifo() {
     XLlFifo_IntClear(&fifo_npr_tx, 0xFFFFFFFF);
     XLlFifo_Reset(&fifo_npr_tx);
 
-    /* Сразу после сброса вакансия равна полной глубине — единственный способ
-     * узнать её из программы. Это FIFO данных, её глубина и задаёт дно по
-     * задержке для видео. */
+    /* Right after the reset the vacancy equals the full depth, the only way
+     * to learn it from software. This is the data FIFO, and its depth sets
+     * the latency floor for video. */
     {
         u32 depth = XLlFifo_iTxVacancy(&fifo_npr_tx);
         radio_stream_set_fifo_depth_data(depth);
@@ -3843,11 +3689,11 @@ int init_tx_rx_fifo() {
 
     /* Right after reset the TX vacancy equals the full FIFO depth. It is a
      * build-time IP parameter and is not exported to xparameters.h, so this
-     * is the only way to learn it from software. На новой платформе
-     * обрамление снято, поэтому один сегмент стоит 188/4 = 47 слов. */
+     * is the only way to learn it from software. The new platform has no
+     * framing, so one segment costs 188/4 = 47 words. */
     {
         u32 depth = XLlFifo_iTxVacancy(&fifo);
-        radio_stream_set_fifo_depth(depth);   /* FIFO телеметрии */
+        radio_stream_set_fifo_depth(depth);   /* telemetry FIFO */
         xil_printf("[FIFO] TX depth = %u words (%u bytes, %u blocks)\r\n",
                    (unsigned)depth, (unsigned)depth * 4, (unsigned)depth / 47);
     }
@@ -3869,7 +3715,7 @@ int init_deb_fifo() {
 
 
 
-// Универсальная функция отправки байта
+/* byte send */
 void send_response_byte(XUartPs *uart_ptr, u8 byte) {
     if (current_cmd_source == CMD_SRC_UART) {
         if (uart_ptr) {
@@ -3998,9 +3844,9 @@ for (int i = 0; i < size; i++) {
 
 
 
-/* Пересчёт RSSI из того, что отдала ПЛИС вместе с сегментом: сырой код
- * делится на 4 и уменьшается на усиление AD9361, константа — поправка на
- * тон 3500. Та же формула, что для секундного замера по SPI. */
+/* RSSI from what the PL sends with the segment: raw code over 4, minus the
+ * AD9361 gain, plus the 3500 tone correction. Same formula as the 1 Hz SPI
+ * reading. */
 static float deb_rssi_dbm(const struct deb_chan_rx *r)
 {
 	float rssi = -(float)r->ad9361_rssi;
@@ -4009,19 +3855,15 @@ static float deb_rssi_dbm(const struct deb_chan_rx *r)
 	return rssi + 13.9397;
 }
 
-/* Накопление секундной статистики канала по одной записи диагностики.
+/* Per-second channel stats from one diag entry. The entry carries the
+ * channel number: 0 = data, 1 = control. The *_mean fields accumulate a
+ * sum, the receiver divides by cnt_seg. The counting is reset by the status
+ * sender, which sets is_clr = 1.
  *
- * Запись помечена номером канала: 0 — информационный, 1 — управления.
- * Поля *_mean накапливают сумму, делить на cnt_seg должен получатель.
- * Сбрасывает счёт не эта функция, а отправитель статуса: он ставит
- * is_clr = 1, и следующая запись начинает секунду заново.
- *
- * Потери считаем по разрывам счётчика в первом байте сегмента. Счётчиков
- * там два: старший бит выбирает поток (0 — данные, 1 — телеметрия), младшие
- * семь бит — счётчик этого потока. Поэтому и хранить предыдущий номер нужно
- * отдельно по каждому потоку, иначе на каждом переключении потока разрыв
- * выглядел бы как потеря. Для этого и существует пара pr_seg/npr_seg;
- * 0xFF означает «номера ещё не было». */
+ * Losses come from gaps in the counter in the first segment byte. There are
+ * two counters there: the top bit picks the stream, the low seven bits are
+ * that stream's counter. So the previous number is kept per stream, else
+ * every stream switch would look like a loss. 0xFF means "no number yet". */
 static void stat_chan_accum(const struct deb_chan_rx *r)
 {
 	struct stat_rx_chan *st;
@@ -4035,7 +3877,7 @@ static void stat_chan_accum(const struct deb_chan_rx *r)
 	const bool     failed = (r->rs_dec_stat.inside.rs_dec_fail == 1);
 	const uint8_t  seq    =  r->cnt_seg & 0x7F;
 	const float    rssi   =  deb_rssi_dbm(r);
-	/* приоритетный поток — телеметрия (старший бит 1) */
+	/* telemetry is the priority stream, top bit 1 */
 	uint8_t *prev = ((r->cnt_seg >> 7) & 1) ? &st->pr_seg : &st->npr_seg;
 
 	if (st->is_clr) {
@@ -4057,8 +3899,8 @@ static void stat_chan_accum(const struct deb_chan_rx *r)
 
 		st->del_ack_mean = r->del_ack;
 	} else {
-		/* Разрыв ищем только по успешно принятым: у несобранного сегмента
-		 * номер недостоверен. */
+		/* Gaps only on successfully received segments: a broken one has no
+		 * trustworthy number. */
 		if (!failed && *prev != 0xFF && ((*prev + 1) & 0x7F) != seq)
 			st->cnt_lost_seg++;
 
@@ -4092,8 +3934,8 @@ void send_deb_rx_append() {
 
 	const struct deb_chan_rx *rec = &buf_deb_chan_rx[buf_deb_chan_rx_rad];
 
-	/* Статистика считается всегда, отправка наружу — как получится. Если
-	 * привязать её к pbuf, то при нехватке буферов секунда недосчитается. */
+	/* Stats always count, sending out is best effort: tying them to a pbuf
+	 * would lose a second whenever buffers run short. */
 	stat_chan_accum(rec);
 
     struct pbuf *p = pbuf_alloc(PBUF_TRANSPORT, sizeof(struct deb_chan_rx), PBUF_RAM);
@@ -4111,8 +3953,8 @@ void send_deb_rx_append() {
         xil_printf("Failed to allocate pbuf for buf_deb_chan_rx\n\r");
     }
 
-    /* Запись обработана в любом случае: если её не продвинуть, писатель
-     * кольца всё равно затрёт её, а статистика посчитает дважды. */
+    /* The entry is consumed either way: if it is not advanced, the ring
+     * writer overwrites it anyway and the stats would count it twice. */
     buf_deb_chan_rx_rad++;
     if (buf_deb_chan_rx_rad == BUF_DEB_CHAN_RX_DEPTH) buf_deb_chan_rx_rad = 0;
 

@@ -5,83 +5,53 @@
 #include <string.h>
 #include <stdbool.h>
 #include "modem.h"
-#include "watchdog.h"   /* wdt_progress_kick - WDT robustness under load */
-#include "xtime_l.h"    /* XTime - ms timestamp for queue telemetry */
+#include "watchdog.h"   /* wdt_progress_kick */
+#include "xtime_l.h"
+
 #include "lwip/prot/ethernet.h"
 #include "lwip/prot/ip4.h"
 
-/* Отладочный канал приёма — из новой платформы. */
+/* RX debug channel */
 struct deb_chan_rx buf_deb_chan_rx[BUF_DEB_CHAN_RX_DEPTH];
 uint32_t buf_deb_chan_rx_wad = 0;
 uint32_t buf_deb_chan_rx_rad = 0;
 
 extern struct netif port3_bridge;
 
-#define PL_BLOCK_SIZE 188       // Р Р°Р·РјРµСЂ Р±Р»РѕРєР° РґР»СЏ FPGA
-#define BLOCK_HEADER_SIZE 3   /* [0]=seq, [1..2]=device_id источника */ //    // 1 Р±Р°Р№С‚ РЅР° СЃС‡РµС‚С‡РёРє СЃРµРіРјРµРЅС‚РѕРІ
-#define BLOCK_PAYLOAD_SIZE (PL_BLOCK_SIZE - BLOCK_HEADER_SIZE) // 187 Р±Р°Р№С‚ РґР°РЅРЅС‹С…
+#define PL_BLOCK_SIZE 188
+#define BLOCK_HEADER_SIZE 3   /* [0]=stream bit + seq, [1..2]=src device_id */
+#define BLOCK_PAYLOAD_SIZE (PL_BLOCK_SIZE - BLOCK_HEADER_SIZE)   /* 185 */
 
 #define MAGIC_H 0xFA
 #define MAGIC_L 0xCE
 
-/* Ring sizing. The depth of a queue IS a latency: depth / drain rate.
- *
- * Measured on hardware 2026-09-04 with the link saturated (see docs):
- *   drain rate        308 950 B/s   (2.47 Mbit/s of payload)
- *   old 192 512 B  -> 623 ms of standing queue, and it sat 99% full
- *   PL TX FIFO 32 752 B -> another 92 ms that cannot be removed from here
- *   measured ping under load: 713 ms (4.6 ms idle)
- *
- * A big ring does not buy throughput - the air carries what it carries. It only
- * buys burst tolerance, and past that it just delivers stale data: a frame 600 ms
- * late is dropped by the decoder anyway, so it is better dropped early.
- *
- * Sized for ~50 ms of buffering. Going lower buys little (the FIFO's 92 ms then
- * dominates) and costs burst tolerance. 16 KB holds ~10 full-size frames.
- * If the air rate changes, re-derive: bytes = rate_Bps * 0.05.
- *
- * rx_ring shares this size but never holds more than one block: radio_input_block
- * drains it completely in the same call.
- */
+/* Ring depth is latency: depth / drain rate. A big ring buys burst tolerance
+ * only; a frame that late gets dropped by the decoder anyway. */
 #define RING_SIZE (188 * 1024)
 
-/* ================= Traffic classes =================
- * Two independent streams share the radio: bulk DATA (video) and latency
- * critical TELEMETRY. They get separate rings, so telemetry never queues
- * behind a video backlog, and a strict-priority arbiter decides which stream
- * feeds the PL next.
- *
- * Classification is by destination UDP port, plus ARP and ICMP: those are tiny
- * and the link looks dead when they arrive late, so they ride the fast lane.
- * Ports are compile-time on purpose - the operator sets them once per install.
- *
- * NOTE: with a single PL FIFO the arbiter's decision is partly undone inside
- * the FIFO (it is always full, ~92 ms measured). Telemetry latency therefore
- * bottoms out at that FIFO depth until the second/third PL FIFO arrives; the
- * rings, framers and parsers built here carry over unchanged.
- */
-#define TLM_UDP_PORTS  { 5005, 5006 }   /* TODO: подставить реальные порты */
+/* Two streams share the radio: bulk DATA and latency-critical TELEMETRY.
+ * Separate rings and FIFOs. Class by dst UDP port, plus ARP and ICMP. */
+#define TLM_UDP_PORTS  { 5005, 5006 }   /* TODO: real ports */
 
 #define STREAM_DATA 0
 #define STREAM_TLM  1
 #define STREAM_CNT  2
 
-/* Telemetry ring is small on purpose: its depth IS the telemetry latency, and
- * under strict priority it should stay nearly empty. 8 KB holds ~5 full frames. */
+/* Small on purpose: its depth is the telemetry latency */
 #define TLM_RING_SIZE (8 * 1024)
 
-extern XLlFifo fifo;          /* MM_S_0: приём всего + передача телеметрии */
-extern XLlFifo fifo_npr_tx;   /* MM_S_2: передача данных                   */
+extern XLlFifo fifo;          /* MM_S_0: all RX + telemetry TX */
+extern XLlFifo fifo_npr_tx;   /* MM_S_2: data TX */
 
 typedef struct {
     uint8_t  *ring;
     uint32_t  size;
     uint32_t  head, tail, count;
-    uint16_t  pkt_id;        /* per-stream packet counter (framing) */
-    uint8_t   seq;           /* per-stream block counter, 7 bits on air */
-    uint32_t  dbg_pkts;      /* packets accepted into this ring */
-    uint32_t  dbg_reject;    /* packets dropped: ring full */
-    uint32_t  dbg_count_max; /* high-water mark */
+    uint16_t  pkt_id;
+    uint8_t   seq;           /* 7 bits on air */
+    uint32_t  dbg_pkts;
+    uint32_t  dbg_reject;    /* ring was full */
+    uint32_t  dbg_count_max;
 } tx_stream_t;
 
 static uint8_t tx_ring_data[RING_SIZE];
@@ -95,7 +65,7 @@ static tx_stream_t tx_str[STREAM_CNT] = {
 static const uint16_t tlm_ports[] = TLM_UDP_PORTS;
 #define TLM_PORTS_N (sizeof(tlm_ports) / sizeof(tlm_ports[0]))
 
-/* Which stream does this frame belong to? Cheap: header walk, no allocation. */
+/* Which stream does this frame belong to */
 static int classify(struct pbuf *p)
 {
     if (p == NULL || p->len < sizeof(struct eth_hdr)) return STREAM_DATA;
@@ -123,7 +93,7 @@ static int classify(struct pbuf *p)
     return STREAM_DATA;
 }
 
-static int  loopback_enabled = 0;  // 0 = СЂРµР°Р»СЊРЅС‹Р№ FPGA, 1 = РїСЂРѕРіСЂР°РјРјРЅС‹Р№ loopback
+static int  loopback_enabled = 0;  /* 1 = software loopback */
 
 
 #define PL_RX_WORDS  47
@@ -140,31 +110,28 @@ uint16_t cnt_tx_seg=0;
 static u32 dbg_tx_blocks = 0;
 static u32 dbg_rx_blocks = 0;
 static u32 dbg_rx_pkts = 0;
-static u32 dbg_err_seq_gap = 0;   // РџРѕС‚РµСЂРё СЃРµРіРјРµРЅС‚РѕРІ (СЂР°РґРёРѕ)
-static u32 dbg_err_crc = 0;       // РћС€РёР±РєРё CRC
-static u32 dbg_err_fifo_full = 0; // FIFO РїРѕР»РѕРЅ вЂ” Р±Р»РѕРє РґСЂРѕРїРЅСѓС‚
-static u32 dbg_err_rx_overflow = 0; // rx_ring РїРµСЂРµРїРѕР»РЅРµРЅ
-static u32 dbg_err_pkt_gap = 0;   // РџСЂРѕРїСѓСЃРєРё packet ID РЅР° RX
+static u32 dbg_err_seq_gap = 0;   /* lost segments */
+static u32 dbg_err_crc = 0;
+static u32 dbg_err_fifo_full = 0; /* FIFO full, block dropped */
+static u32 dbg_err_rx_overflow = 0;
+static u32 dbg_err_pkt_gap = 0;   /* packet id gaps on RX */
 
-static int crc_dump_done = 0;     // flag for one-shot CRC-error dump
-static u32 dbg_err_tx_stall = 0;  // tx_process aborted (TX FIFO full)
+static int crc_dump_done = 0;     /* one-shot CRC dump */
+static u32 dbg_err_tx_stall = 0;  /* tx_process aborted, TX FIFO full */
 
-/* ---- Диагностика приёмного тракта (добавлено для разбора «блоки идут,
- * пакеты не собираются»). Только счётчики, на поведение не влияют. ---- */
-static u32 dbg_rx_len_new    = 0;  /* кадров 47+DEB слов — новый формат      */
-static u32 dbg_rx_len_legacy = 0;  /* старый формат 54 слов: всегда 0, разбор
-                                    * снят вместе с мёртвым кодом; поле
-                                    * оставлено, чтобы не менять ответ 0x25 */
-static u32 dbg_rx_len_other  = 0;  /* кадров иной длины — не разобраны       */
-static u32 dbg_rx_len_last   = 0;  /* длина последнего НЕОЖИДАННОГО кадра   */
-static u32 dbg_rx_magic      = 0;  /* сколько раз найдена метка FA CE        */
-static u8  dbg_rx_first16[16];     /* первые 16 байт последнего блока        */
+/* RX path counters, reported by 0x25 */
+static u32 dbg_rx_len_new    = 0;  /* 47+DEB words, current format */
+static u32 dbg_rx_len_legacy = 0;  /* always 0, kept so 0x25 keeps its shape */
+static u32 dbg_rx_len_other  = 0;
+static u32 dbg_rx_len_last   = 0;  /* length of the last odd frame */
+static u32 dbg_rx_magic      = 0;  /* FA CE marks found */
+static u8  dbg_rx_first16[16];
 
-/* TX FIFO depth, learned once at init (build-time IP parameter). */
-static u32 g_fifo_tx_depth  = 0;   /* FIFO телеметрии (MM_S_0) */
-static u32 g_fifo_data_depth = 0;  /* FIFO данных     (MM_S_2) */
+/* Learned once at init, it is a build-time IP parameter */
+static u32 g_fifo_tx_depth  = 0;   /* telemetry, MM_S_0 */
+static u32 g_fifo_data_depth = 0;  /* data, MM_S_2 */
 
-// RX РџР°СЂСЃРµСЂ
+/* ---- RX parser ---- */
 typedef enum {
     ST_MAGIC_H, ST_MAGIC_L,
     ST_ID_H,    ST_ID_L,
@@ -173,9 +140,7 @@ typedef enum {
     ST_CRC0, ST_CRC1, ST_CRC2, ST_CRC3
 } rx_state_t;
 
-/* One reassembly context per stream. The two streams are interleaved on air
- * block by block, so each needs its own ring, parser state and counters -
- * feeding both into one parser would splice video into telemetry. */
+/* One reassembly context per stream: on air they interleave block by block */
 typedef struct {
     uint8_t   *ring;
     uint32_t   size, head, tail, count;
@@ -189,8 +154,7 @@ typedef struct {
     int        first_pkt_seen;
 } rx_stream_t;
 
-/* RX rings never hold more than one block: radio_input_block drains what it
- * just wrote in the same call. Sized generously anyway, it costs little. */
+/* Never hold more than one block: radio_input_block drains it in the same call */
 static uint8_t rx_ring_data[RING_SIZE];
 static uint8_t rx_ring_tlm[TLM_RING_SIZE];
 
@@ -203,7 +167,7 @@ static uint16_t rx_last_src_id = 0;   /* source device_id from block header */
 
 
 
-// --- CRC32 (табличный, ~4x быстрее побайтового) ---
+/* CRC32 table */
 static const uint32_t crc32_table[256] = {
     0x00000000, 0x77073096, 0xEE0E612C, 0x990951BA, 0x076DC419, 0x706AF48F, 0xE963A535, 0x9E6495A3,
     0x0EDB8832, 0x79DCB8A4, 0xE0D5E91E, 0x97D2D988, 0x09B64C2B, 0x7EB17CBD, 0xE7B82D07, 0x90BF1D91,
@@ -240,12 +204,12 @@ static const uint32_t crc32_table[256] = {
 };
 
 
-// Побайтовый CRC (для RX парсера — обрабатывает по одному байту)
+/* per-byte, for the RX parser */
 static inline uint32_t calc_crc32_byte(uint32_t crc, uint8_t data) {
     return (crc >> 8) ^ crc32_table[(crc ^ data) & 0xFF];
 }
 
-// Блочный CRC (для TX — считает весь буфер за раз)
+/* whole buffer, for TX */
 static uint32_t calc_crc32_block(const uint8_t *data, uint32_t len, uint32_t crc) {
     for (uint32_t i = 0; i < len; i++)
         crc = (crc >> 8) ^ crc32_table[(crc ^ data[i]) & 0xFF];
@@ -253,21 +217,13 @@ static uint32_t calc_crc32_block(const uint8_t *data, uint32_t len, uint32_t crc
 }
 
 
-// Forward declaration (РѕРїСЂРµРґРµР»РµРЅРёРµ РЅРёР¶Рµ)
+/* defined below */
 void radio_input_block(uint8_t *block_188, struct netif *inp_netif);
 
-/* =========================================================
- * Разбор принятого из FIFO ПЛИС.
- *
- * Кадр: 47 слов сегмента плюс RX_CHAN0_DEB_W слов диагностики, которую
- * ПЛИС дописывает к каждому принятому сегменту. Диагностика ложится в
- * кольцо buf_deb_chan_rx, оттуда её забирает send_deb_rx_append(): шлёт
- * наружу по UDP и накапливает секундную статистику канала.
- *
- * Приёмных каналов теперь два, и различаются они ровно двумя вещами:
- * номером, которым помечается запись диагностики, и тем, отдавать ли
- * сегмент в мост. Поэтому тело одно, а снаружи две тонкие обёртки.
- * ========================================================= */
+/* Frame from the PL FIFO: 47 segment words + RX_CHAN0_DEB_W diag words.
+ * Diag goes to buf_deb_chan_rx, send_deb_rx_append() picks it up.
+ * Two RX channels differ only in chan_id and whether the segment
+ * goes to the bridge, so one body with two thin wrappers. */
 static void drain_chan_fifo(XLlFifo *fifo_data, uint8_t chan_id, bool to_bridge)
 {
 	if (!XLlFifo_iRxOccupancy(fifo_data)) return;
@@ -276,9 +232,7 @@ static void drain_chan_fifo(XLlFifo *fifo_data, uint8_t chan_id, bool to_bridge)
 	u32 ReceiveLength = (XLlFifo_iRxGetLen(fifo_data)) / 4;
 
 	if (ReceiveLength != 47 + RX_CHAN0_DEB_W) {
-		/* Счётчики длин ведём только по информационному каналу: диагностика
-		 * 0x25 рассказывает про сборку пакетов, и подмешивать туда канал
-		 * управления значит сделать её нечитаемой. */
+		/* data channel only: mixing the control channel makes 0x25 unreadable */
 		if (to_bridge) { dbg_rx_len_other++; dbg_rx_len_last = ReceiveLength; }
 		xil_printf("fifo_rx_len=%d\n\r", ReceiveLength);
 		for (u32 i = 0; i < ReceiveLength; i++) RxWord = XLlFifo_RxGetWord(fifo_data);
@@ -319,17 +273,13 @@ static void drain_chan_fifo(XLlFifo *fifo_data, uint8_t chan_id, bool to_bridge)
 	u32 ap_dat4 = XLlFifo_RxGetWord(fifo_data);
 	d->del_ack = ap_dat4;
 
-	/* Признак снимаем ДО продвижения кольца. В версии коллеги проверка стоит
-	 * после инкремента и читает уже следующую ячейку — чужую запись,
-	 * оставшуюся от прошлого оборота кольца. Решение «отдавать сегмент или
-	 * нет» получалось случайным. */
+	/* read the flag BEFORE advancing the ring, else it reads the next slot */
 	const bool rs_ok = (d->rs_dec_stat.inside.rs_dec_fail == 0);
 
 	buf_deb_chan_rx_wad++;
 	if (buf_deb_chan_rx_wad == BUF_DEB_CHAN_RX_DEPTH) buf_deb_chan_rx_wad = 0;
 
-	/* В мост — только из информационного канала и только то, что RS
-	 * восстановил. Канал управления отдаёт лишь диагностику. */
+	/* to the bridge: data channel only, and only what RS recovered */
 	if (to_bridge && rs_ok) {
 		for (int i = 0; i < PL_RX_WORDS * 4; i++) drain_rx_block[i] = fifo_buf[0 + i];
 		radio_input_block(drain_rx_block, &port3_bridge);
@@ -350,7 +300,7 @@ void drain_cntrl_tx_fifo(XLlFifo* fifo_data)
 
 
 
-// РҐРµР»РїРµСЂ РѕС‚РїСЂР°РІРєРё РІ FPGA (vacancy СѓР¶Рµ РїСЂРѕРІРµСЂРµРЅР° РІ tx_process)
+/* send to the PL, vacancy already checked */
 static void send_block_to_pl(uint8_t *block, XLlFifo *f) {
 
    struct ppos_tx ppos_tx_par;
@@ -372,22 +322,10 @@ static void send_block_to_pl(uint8_t *block, XLlFifo *f) {
    if (ppos_tx_par.creg0.inside.run == 1) {
 
 
-    //if (XLlFifo_iTxVacancy(f) >= ((PL_BLOCK_SIZE+28) / 4) ) {
     if (XLlFifo_iTxVacancy(f) >= ((PL_BLOCK_SIZE+0) / 4) ) {
 
         u32 word;
 
-        /*        word = 0xb6ce261d;
-        //word = swap32(word);
-        XLlFifo_TxPutWord(f, word);
-        word = 0x6d9c0000;
-        word+=cnt_tx_seg;
-        uint16_t check=cnt_tx_seg;
-        cnt_tx_seg++;
-        XLlFifo_TxPutWord(f, word);
-        word = 0x00000000;
-        XLlFifo_TxPutWord(f, word);
-*/
 
         for (u32 i = 0; i < PL_BLOCK_SIZE + 0; i += 4) {
 
@@ -397,33 +335,18 @@ static void send_block_to_pl(uint8_t *block, XLlFifo *f) {
             word =  (u32)block[i]        | ((u32)block[i+1] << 8) |
                    ((u32)block[i+2] << 16)| ((u32)block[i+3] << 24);
 
-            //word =  i+3   | (i+2) << 8 |
-            //             (i+1) << 16 | (i+0) << 24;
 
 
 
         	} else word =0;
 
-            //check+=  (uint16_t)block[i] | ((uint16_t)block[i+1] << 8);
-            //check+=  (uint16_t)block[i+2] | ((uint16_t)block[i+3] << 8);
 
             XLlFifo_TxPutWord(f, word);
         }
 
 
-/*
-        word = 0x00000000;
-        word+=check;
-        XLlFifo_TxPutWord(f, word);
-
-        word = 0x00000000;
-        XLlFifo_TxPutWord(f, word);
-        XLlFifo_TxPutWord(f, word);
-        XLlFifo_TxPutWord(f, word);
-*/
 
 
-        //u32 byt = PL_BLOCK_SIZE+28;
         u32 byt = PL_BLOCK_SIZE+0;
 
         XLlFifo_iTxSetLen(f, byt);
@@ -438,11 +361,9 @@ static void send_block_to_pl(uint8_t *block, XLlFifo *f) {
 }
 
 
-// =========================================================
-// Р§РђРЎРўР¬ TX (РћРўРџР РђР’РљРђ)
-// =========================================================
+/* ---- TX ---- */
 
-/* Block write into a stream's ring (handles wrap-around). */
+/* Block write into a stream ring, handles wrap-around */
 static void tx_push_block(tx_stream_t *s, const uint8_t *src, uint32_t len) {
 
     uint32_t space_to_end = s->size - s->head;
@@ -459,21 +380,19 @@ static void tx_push_block(tx_stream_t *s, const uint8_t *src, uint32_t len) {
         chunk = len;
     }
 
-    /* High-water mark: a 10 Hz poll would miss the peaks between samples. */
+    /* high-water mark: a 10 Hz poll misses the peaks */
     if (s->count > s->dbg_count_max) s->dbg_count_max = s->count;
 }
 
-/* Cut one block off a stream and hand it to the PL. */
+/* Cut one block off a stream and hand it to the PL */
 static void tx_emit_block(tx_stream_t *s, int stream_id, XLlFifo *f) {
     uint8_t block[PL_BLOCK_SIZE];
 
-    /* [0] = stream bit (7) + 7-bit block counter of THIS stream. The receiver
-     * demuxes on that bit; the counter still detects lost blocks per stream. */
+    /* [0] = stream bit (7) + 7-bit per-stream block counter */
     block[0] = (uint8_t)((stream_id << 7) | (s->seq & 0x7F));
     s->seq = (uint8_t)((s->seq + 1) & 0x7F);
 
-    /* device_id (2 bytes) into EVERY block header - for point-to-multipoint:
-     * receiver tells which modem the segment came from. */
+    /* src device_id in every block, for point-to-multipoint */
     block[1] = (current_config.device_id >> 8) & 0xFF;
     block[2] =  current_config.device_id       & 0xFF;
 
@@ -492,28 +411,14 @@ static void tx_emit_block(tx_stream_t *s, int stream_id, XLlFifo *f) {
     send_block_to_pl(block, f);
 }
 
-/* Arbiter: strict priority, telemetry first.
- *
- * A packet spans several blocks, and the two streams interleave block by
- * block - that is exactly why the stream bit exists, the receiver reassembles
- * each stream separately. Within a stream, order is preserved.
- *
- * Worst case a telemetry block waits for the data block already handed to the
- * PL, i.e. one block time - not the length of the video backlog ahead of it. */
-/* Раздача по FIFO. Арбитра здесь больше нет: с появлением второй FIFO
- * очерёдность в эфире решает ПЛИС, а задача ПС — только разложить сегменты
- * по своим очередям.
- *
- * Два независимых цикла, а не выбор «кто следующий»: переполнение одной FIFO
- * не должно останавливать другую. Раньше строгий приоритет был вынужденной
- * мерой — обе очереди делили одну FIFO, и телеметрия вставала за видео уже
- * внутри неё. */
+/* No arbiter here: with two FIFOs the PL decides the order on air.
+ * Two independent loops, so one full FIFO cannot stall the other. */
 static void tx_drain_stream(int stream_id, XLlFifo *f)
 {
     tx_stream_t *s = &tx_str[stream_id];
 
     while (s->count >= BLOCK_PAYLOAD_SIZE) {
-        /* Обрамление платформа сняла, в FIFO уходит ровно PL_BLOCK_SIZE. */
+        /* exactly PL_BLOCK_SIZE goes into the FIFO, no framing */
         if (XLlFifo_iTxVacancy(f) < ((PL_BLOCK_SIZE + 0) / 4)) {
             dbg_err_tx_stall++;
             break;
@@ -531,9 +436,7 @@ void tx_process() {
 
 err_t radio_linkoutput(struct netif *netif, struct pbuf *p) {
 
-    /* Робастность WDT: пока пакеты реально текут через radio path — это прогресс,
-     * не hang. Кикаем WDT (троттл внутри), чтобы под нагрузкой не было ложных
-     * ребутов. ДО drop-проверки — поток дропаемых пакетов тоже держит таймер. */
+    /* packets flowing = progress, not a hang. Before the drop check on purpose. */
     wdt_section_mark(WDT_SEC_RADIO_TX);
     wdt_progress_kick();
 
@@ -547,7 +450,7 @@ err_t radio_linkoutput(struct netif *netif, struct pbuf *p) {
 
     s->dbg_pkts++;
 
-    // CRC32 по всему пакету (блочный — один table lookup на байт)
+    /* CRC32 over the whole packet */
     uint32_t crc = 0xFFFFFFFF;
     struct pbuf *q;
     for(q = p; q != NULL; q = q->next) {
@@ -555,7 +458,7 @@ err_t radio_linkoutput(struct netif *netif, struct pbuf *p) {
     }
     crc = ~crc;
 
-    // Заголовок (10 байт) — побайтово, мелкий overhead
+    /* header, 10 bytes total with the CRC */
     uint8_t hdr[6];
     hdr[0] = MAGIC_H;
     hdr[1] = MAGIC_L;
@@ -566,12 +469,12 @@ err_t radio_linkoutput(struct netif *netif, struct pbuf *p) {
     s->pkt_id++;
     tx_push_block(s, hdr, 6);
 
-    // Данные пакета — блочная запись (memcpy вместо побайтовой)
+    /* packet data */
     for(q = p; q != NULL; q = q->next) {
         tx_push_block(s, (uint8_t*)q->payload, q->len);
     }
 
-    // CRC (4 байта)
+    /* CRC, 4 bytes */
     uint8_t crc_bytes[4];
     crc_bytes[0] = (crc >> 24) & 0xFF;
     crc_bytes[1] = (crc >> 16) & 0xFF;
@@ -585,9 +488,7 @@ err_t radio_linkoutput(struct netif *netif, struct pbuf *p) {
 
 
 void radio_tx_periodic_flush(void) {
-    /* A tail shorter than one block would sit in the ring until more traffic
-     * arrives. Pad it out so the packet is not held hostage - matters most for
-     * telemetry, which is bursty and small. */
+    /* Pad a tail shorter than one block, else it waits for more traffic */
     for (int i = 0; i < STREAM_CNT; i++) {
         tx_stream_t *s = &tx_str[i];
         if (s->count > 0 && s->count < BLOCK_PAYLOAD_SIZE) {
@@ -603,25 +504,21 @@ void radio_tx_periodic_flush(void) {
 }
 void radio_poll(void) {
     drain_rx_fifo(&fifo);
-    tx_process();  // resends blocks from the rings if room in FIFO
+    tx_process();  /* drains the rings if the FIFO has room */
 }
 
-// =========================================================
-// Р§РђРЎРўР¬ RX (РџР Р�Р•Рњ)
-// =========================================================
+/* ---- RX ---- */
 
 void radio_input_block(uint8_t *block_188, struct netif *inp_netif) {
     dbg_rx_blocks++;
     for (int i = 0; i < 16; i++) dbg_rx_first16[i] = block_188[i];
 
-    /* [0] = stream bit (7) + 7-bit per-stream block counter. Demux first:
-     * feeding both streams into one parser would splice them together. */
+    /* demux on the stream bit first, else the parsers splice the streams */
     int stream_id = (block_188[0] >> 7) & 1;
     uint8_t seq   = block_188[0] & 0x7F;
     rx_stream_t *st = &rx_str[stream_id];
 
-    /* source device_id (point-to-point for now - just read; in multipoint
-     * this will demux by source). */
+    /* src device_id: just read for now, multipoint will demux on it */
     rx_last_src_id = ((uint16_t)block_188[1] << 8) | block_188[2];
 
     if (!st->first_block_seen) {
@@ -692,7 +589,7 @@ void radio_input_block(uint8_t *block_188, struct netif *inp_netif) {
                     st->state = ST_MAGIC_H;
                 } else {
                     st->pkt_received = 0;
-                    st->calc_crc = 0xFFFFFFFF; // Init CRC
+                    st->calc_crc = 0xFFFFFFFF;
                     st->state = ST_DATA;
                 }
                 break;
@@ -701,7 +598,7 @@ void radio_input_block(uint8_t *block_188, struct netif *inp_netif) {
                 st->pkt_buffer[st->pkt_received++] = b;
                 st->tail = (st->tail + 1) % st->size; st->count--;
                 if (st->pkt_received == st->pkt_len) {
-                    st->calc_crc = ~st->calc_crc; // Finalize CRC
+                    st->calc_crc = ~st->calc_crc;
                     st->state = ST_CRC0;
                 }
                 break;
@@ -712,7 +609,6 @@ void radio_input_block(uint8_t *block_188, struct netif *inp_netif) {
             case ST_CRC3: st->recv_crc |= b;
                 st->tail = (st->tail + 1) % st->size; st->count--;
 
-                // CRC CHECK
                 if (st->recv_crc == st->calc_crc) {
                     dbg_rx_pkts++;
 
@@ -721,9 +617,8 @@ void radio_input_block(uint8_t *block_188, struct netif *inp_netif) {
                     if (p != NULL) {
                         memcpy(p->payload, st->pkt_buffer, st->pkt_len);
 
-                        /* Both streams are ordinary Ethernet frames: the bridge
-                         * on this side delivers them by MAC, so telemetry needs
-                         * no special handling here. */
+                        /* both streams are plain Ethernet frames, the bridge
+                         * delivers them by MAC */
                         if (inp_netif->input != NULL) {
                             if (inp_netif->input(p, inp_netif) != ERR_OK) {
                             	printf("NOT input\r\n");
@@ -750,7 +645,7 @@ void radio_input_block(uint8_t *block_188, struct netif *inp_netif) {
     }
 }
 
-// Р’С‹РІРѕРґ СЃС‚Р°С‚РёСЃС‚РёРєРё
+/* ---- stats ---- */
 void radio_stream_print_stats(void) {
     xil_printf("TX data: %u Pkt (reject %u)   TX tlm: %u Pkt (reject %u)\r\n",
         tx_str[STREAM_DATA].dbg_pkts, tx_str[STREAM_DATA].dbg_reject,
@@ -827,8 +722,7 @@ void radio_stream_set_fifo_depth(uint32_t words) {
 void radio_stream_get_queue_stats(radio_queue_stats_t *out) {
     if (!out) return;
     out->t_ms            = now_ms();
-    /* Fields 2..12 describe the DATA stream, so baselines taken before
-     * prioritisation stay comparable. Telemetry is appended after them. */
+    /* Fields 2..12 are the DATA stream, telemetry is appended after them */
     out->ring_size       = tx_str[STREAM_DATA].size;
     out->tx_count        = tx_str[STREAM_DATA].count;
     out->tx_count_max    = tx_str[STREAM_DATA].dbg_count_max;

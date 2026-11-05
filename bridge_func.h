@@ -1,9 +1,4 @@
-/**
- * @file
- * IEEE 802.1D MAC Bridge with 3 ports & 1 virtual Netif
- *    - (phy xemac) <-> port 1
- *    -
- */
+/* IEEE 802.1D MAC bridge: 3 ports, 1 virtual netif. phy xemac <-> port 1. */
 
 /*
  * Copyright (c) 2017 KNK.
@@ -34,8 +29,7 @@
 
 #define DEB_FUNC  0
 
-/* bridge_data заполняется в рантайме из current_config (см. net_init).
- * MAC внутри (ethaddr) выставляется перед netif_add. */
+/* filled at runtime from current_config in net_init; ethaddr set before netif_add */
 extern bridgeif_initdata_t bridge_data;
 
 
@@ -51,7 +45,7 @@ typedef struct {
     bridgeif_fdb_dynamic_entry_t *fdb;
 } bridgeif_fdb_dynamic_t;
 
-/* MAC'и (mac1=GEM, mac3=radio) теперь в current_config, заполняются в net_init. */
+/* mac1=GEM, mac3=radio live in current_config */
 
 
 
@@ -75,7 +69,6 @@ err_t eth_inp(struct pbuf *p, struct netif *netif);
 
 void net_init();
 
-//static err_t udpif2_demux_input(struct pbuf *p, struct netif *netif);
 
 
 #endif // BRIDGE_FUNC_H_

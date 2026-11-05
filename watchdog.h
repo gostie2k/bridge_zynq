@@ -3,204 +3,102 @@
 
 #include <stdint.h>
 
-/* ===================================================================
- *  Hardware watchdog (XScuWdt) + software heartbeat supervision
- *  ------------------------------------------------------------------
- *  Назначение: при зависании любого из hot-path модулей PS получает
- *  жёсткий reset через WDRESETREQ → SLCR.
- *
- *  Архитектура:
- *    - wdt_init() конфигурирует XScuWdt с timeout WDT_TIMEOUT_MS.
- *    - wdt_start() запускает таймер. После этого ОБЯЗАТЕЛЬНО
- *      периодически вызывать wdt_kick() реже, чем WDT_TIMEOUT_MS.
- *    - Каждый hot-path модуль (main loop, lwIP RX, radio TX/RX)
- *      периодически вызывает свой wdt_hb_*() — это software heartbeat.
- *    - wdt_kick() проверяет возраст всех heartbeat'ов. Если хоть один
- *      "протух" (age > порог) — не перезаряжает таймер. Через WDT_TIMEOUT_MS
- *      PS получит soft reset.
- *
- *  Под отладчиком (JTAG) определи WDT_DISABLED глобально (например
- *  через -DWDT_DISABLED в Debug-конфиге Vitis) — все API станут no-op.
- *
- *  Для диагностики hang-теста (когда reset не происходит и нужно
- *  понять причину) определи WDT_DIAG_HANG — wdt_simulate_hang() будет
- *  печатать состояние WDT/GIC/CPSR каждые 200 мс.
- * =================================================================== */
+/* HW watchdog (XScuWdt) + software heartbeats (HB).
+ * -DWDT_DISABLED: calls do nothing. -DWDT_DIAG_HANG: print WDT/GIC regs. */
 
 #ifndef WDT_TIMEOUT_MS
-#define WDT_TIMEOUT_MS  2000u    /* при отсутствии kick'а — soft reset */
+#define WDT_TIMEOUT_MS  2000u
 #endif
 
-/* Включён ли WDT по умолчанию при старте. 1 = боевой режим (в поле ловит редкие
- * висы и ребутит), 0 = выключен (отладка под JTAG / диагностика без ребутов).
- * Рантайм-тумблер — wdt_set_enabled() / UDP 0x90 0x4C. */
+/* runtime switch: 0x90 0x4C */
 #ifndef WDT_ENABLED_DEFAULT
 #define WDT_ENABLED_DEFAULT  1
 #endif
 
-/* Пороги "протухания" каждого heartbeat'а в миллисекундах.
- * Если модуль не отметился дольше — он считается зависшим.
- *
- * Замечание: эти пороги должны быть БОЛЬШЕ нормальной длительности
- * одной итерации main loop, иначе будут ложные ресеты. SPI к AD9361
- * и тяжёлые UDP-команды могут занимать сотни мс. */
-#define WDT_HB_MAIN_MAX_MS  1000u   /* main loop — один проход обычно <100ms */
-#define WDT_HB_LWIP_MAX_MS  1500u   /* xemacif_input может молчать в простое */
-#define WDT_HB_TX_MAX_MS    5000u   /* радио-TX может простаивать */
-#define WDT_HB_RX_MAX_MS    5000u   /* радио-RX может простаивать */
+/* max HB age, ms; must exceed one main loop pass */
+#define WDT_HB_MAIN_MAX_MS  1000u
+#define WDT_HB_LWIP_MAX_MS  1500u
+#define WDT_HB_TX_MAX_MS    5000u
+#define WDT_HB_RX_MAX_MS    5000u
 
-/* Throttle для wdt_progress_kick() — перезарядка таймера из hot-path при
- * реальном прогрессе обработки пакетов. Должен быть заметно меньше
- * WDT_TIMEOUT_MS, чтобы длинный проход xemacif_input не успел добить таймер. */
 #define WDT_PROGRESS_KICK_MS  250u
 
-/* Какие heartbeat'ы УЧИТЫВАЮТСЯ при проверке.
- * MAIN — обязательно. Остальные включай, когда уверен что они
- * генерируются в нормальном режиме работы. */
 #define WDT_CHECK_MAIN   1
-#define WDT_CHECK_LWIP   0   /* выключено: в простое трафика нет */
-#define WDT_CHECK_TX     0   /* выключено: радио-TX опционален */
-#define WDT_CHECK_RX     0   /* выключено: радио-RX опционален */
+#define WDT_CHECK_LWIP   0
+#define WDT_CHECK_TX     0
+#define WDT_CHECK_RX     0
 
-/* ===================================================================
- *  API
- * =================================================================== */
-
-/* Forward declaration — чтобы не тащить весь xscugic.h в шапку. */
 struct XScuGic;
 
-/* Инициализация XScuWdt в TIMER mode + регистрация ISR.
- * ISR при таймауте дёргает SLCR.PSS_RST_CTRL.SOFT_RST → полный PS reset
- * с перезапуском FSBL (НЕ только CPU reset как в watchdog-mode).
- *
- * Требует уже инициализированный XScuGic.
- * Возвращает 0 при успехе, !=0 при ошибке. */
-int  wdt_init(struct XScuGic *gic);
-
-/* Запуск таймера. После вызова обязательно периодически кикать. */
+int  wdt_init(struct XScuGic *gic);   /* 0 = ok */
 void wdt_start(void);
-
-/* Останов таймера (для отладки). */
 void wdt_stop(void);
-
-/* Рантайм вкл/выкл WDT (тумблер по UDP 0x90 0x4C). enable!=0 → start (если
- * проинициализирован и ещё не запущен), enable==0 → stop (таймер остановлен,
- * ребутов не будет). Безопасно вызывать повторно. */
 void wdt_set_enabled(int enable);
-
-/* 1 если WDT сейчас включён (таймер тикает). */
 int  wdt_is_enabled(void);
-
-/* Проверить heartbeat'ы и при OK перезарядить таймер.
- * Вызывать из main loop в конце каждой итерации. */
-void wdt_kick(void);
-
-/* Перезарядка таймера из hot-path при РЕАЛЬНОМ прогрессе обработки.
- * Назначение: под перегрузкой xemacif_input может за один вызов разгребать
- * большой GEM-RX backlog и не возвращаться в main loop секундами — тогда
- * аппаратный WDT (перезаряжается только в wdt_kick() из main loop) добивает
- * до нуля и даёт ложный ребут. Вызов из per-packet пути (radio_linkoutput)
- * освежает MAIN-heartbeat и перезаряжает таймер, троттлингом не чаще
- * WDT_PROGRESS_KICK_MS. Настоящий hang (без прогресса сюда не дойдёт) ловится
- * по-прежнему. Дёшев: при попадании в троттл — один XTime read + сравнение. */
-void wdt_progress_kick(void);
-
-/* Диагностика: сколько раз вызывался wdt_progress_kick (ДО троттла) — растёт,
- * если per-frame путь моста реально крутится. Сравнить с kick_count (фактические
- * перезарядки таймера) в wdt_stats. */
+void wdt_kick(void);                  /* end of main loop */
+void wdt_progress_kick(void);         /* from packet path */
 uint32_t wdt_get_progress_kick_calls(void);
 
-/* Heartbeat'ы — вызывать из соответствующих hot-path функций.
- * Дёшёвы: один volatile store + чтение XTime. */
 void wdt_hb_main(void);
 void wdt_hb_lwip(void);
 void wdt_hb_tx(void);
 void wdt_hb_rx(void);
 
-/* ===================================================================
- *  Диагностика
- * =================================================================== */
-
 typedef struct {
-    uint32_t reboot_status;     /* SLCR.REBOOT_STATUS, прочитанный при старте */
-    uint32_t wdt_reset_flag;    /* 1 если предыдущий ресет был от WDT */
-    uint32_t kick_count;        /* счётчик успешных kick'ов */
-    uint32_t starve_count;      /* счётчик случаев "heartbeat протух" */
-    uint32_t last_starve_mask;  /* битовая маска heartbeat'ов которые протухли в последний раз */
-    uint32_t uptime_sec;        /* секунд с момента wdt_start */
-    uint8_t  crash_section;     /* main_section на момент crash'а */
-    uint8_t  crash_oldest_hb;   /* какой HB был старше всех при reset'е (WDT_HB_BIT_*) */
-    uint8_t  crash_starve_mask; /* bitmask HB которые были протухшими при reset'е */
-    uint8_t  crash_valid;       /* 1 если crash-info прочиталась из SLCR scratch */
+    uint32_t reboot_status;
+    uint32_t wdt_reset_flag;
+    uint32_t kick_count;
+    uint32_t starve_count;
+    uint32_t last_starve_mask;
+    uint32_t uptime_sec;
+    uint8_t  crash_section;
+    uint8_t  crash_oldest_hb;   /* index 0..3, 0xF = none */
+    uint8_t  crash_starve_mask;
+    uint8_t  crash_valid;
 } wdt_stats_t;
 
-/* Битовая маска heartbeat'ов (для last_starve_mask) */
 #define WDT_HB_BIT_MAIN  (1u << 0)
 #define WDT_HB_BIT_LWIP  (1u << 1)
 #define WDT_HB_BIT_TX    (1u << 2)
 #define WDT_HB_BIT_RX    (1u << 3)
 
-/* ===================================================================
- *  Section markers — где сейчас main loop
- *  ------------------------------------------------------------------
- *  Перед каждой узловой операцией main loop вызывает wdt_section_mark().
- *  При срабатывании WDT-ISR сохраняем последнюю секцию в SLCR scratch —
- *  после ребута видно, что именно подвисло.
- *  4 бита → до 16 секций. Хочешь больше — расширяй до 5 бит и подвинь
- *  поля в SLCR scratch (см. watchdog.c).
- * =================================================================== */
+/* Main loop section, saved to SLCR scratch on reset. 4 bits, 16 max. */
 typedef enum {
     WDT_SEC_NONE = 0,
-    WDT_SEC_LWIP_INPUT,    /* xemacif_input */
-    WDT_SEC_LWIP_TMR,      /* sys_check_timeouts */
-    WDT_SEC_FIFO_DEB,      /* fifo_deb_read + send_deb (IQ stream) */
+    WDT_SEC_LWIP_INPUT,
+    WDT_SEC_LWIP_TMR,
+    WDT_SEC_FIFO_DEB,      /* fifo_deb_read + send_deb */
     WDT_SEC_RADIO_POLL,    /* radio_poll, drain_rx_fifo, tx_process */
-    WDT_SEC_STATUS_SEND,   /* send_modem_status (1 раз в сек) */
-    WDT_SEC_EXEC_FUNC,     /* exec_func — NPU/AD9361/SPI операции */
-    WDT_SEC_AD9361_SPI,    /* ad9361_get_temperature через no-OS driver */
-    WDT_SEC_VID_SEND,      /* send_vid_packet_* */
-    WDT_SEC_OTHER,         /* всё что не выделено */
-    WDT_SEC_AD9361_TEMP,   /* ad9361_get_temperature (no-OS API) */
-    WDT_SEC_XADC,          /* XSysMon_GetAdcData (Zynq XADC) */
-    WDT_SEC_SPI_RSSI,      /* no_os_spi_write_and_read через desc_tmp (rssi/gain) */
-    WDT_SEC_RADIO_TX,      /* radio_linkoutput / tx_push_block (через bridge) */
-    WDT_SEC_POST_LWIP,     /* код между xemacif_input и FIFO_DEB */
+    WDT_SEC_STATUS_SEND,
+    WDT_SEC_EXEC_FUNC,
+    WDT_SEC_AD9361_SPI,
+    WDT_SEC_VID_SEND,
+    WDT_SEC_OTHER,
+    WDT_SEC_AD9361_TEMP,
+    WDT_SEC_XADC,
+    WDT_SEC_SPI_RSSI,      /* rssi/gain over desc_tmp */
+    WDT_SEC_RADIO_TX,
+    WDT_SEC_POST_LWIP,     /* between xemacif_input and FIFO_DEB */
     WDT_SEC_MAX = 15
 } wdt_section_t;
 
 void wdt_section_mark(wdt_section_t s);
-
-/* Текущая секция (для save/restore вокруг врезок в ISR/BSP). */
 uint8_t wdt_section_get(void);
 
-/* DIAG (B, r8): репёрпоз мёртвых section-ID под локализацию фриза мастера в
- * нормальном RX/TX-пути GEM (врезки в BSP — см. docs/bsp_diag_patch.md).
- * Мёртвые при текущем билде (SPI off): AD9361_SPI(7), AD9361_TEMP(10), SPI_RSSI(12).
- * XADC(11) НЕ трогать — активен. crash_section в 0x40 покажет их по ИСХОДНОМУ
- * имени — помнить маппинг: */
-#define WDT_SEC_GEM_INPUT  WDT_SEC_AD9361_SPI    /* 7  → xemacpsif_input перед netif->input */
-#define WDT_SEC_GEM_RXISR  WDT_SEC_VID_SEND      /* 8  → emacps_recv_handler (RX-ISR while(1)) */
-#define WDT_SEC_GEM_TXOUT  WDT_SEC_AD9361_TEMP   /* 10 → low_level_output (GEM-TX) */
-#define WDT_SEC_GEM_SENT   WDT_SEC_SPI_RSSI      /* 12 → process_sent_bds (TX-done ISR) [r8: исключён] */
+/* Old names for BSP patches, unused */
+#define WDT_SEC_GEM_INPUT  WDT_SEC_AD9361_SPI
+#define WDT_SEC_GEM_RXISR  WDT_SEC_VID_SEND
+#define WDT_SEC_GEM_TXOUT  WDT_SEC_AD9361_TEMP
+#define WDT_SEC_GEM_SENT   WDT_SEC_SPI_RSSI
 
-/* Имя секции для лога/UI. */
 const char *wdt_section_name(uint8_t s);
 
 void wdt_get_stats(wdt_stats_t *out);
 
-/* Сохранить и обнулить SLCR.REBOOT_STATUS. Вызвать ОДИН РАЗ как можно
- * раньше в main() до init'а — иначе следующая запись в REBOOT_STATUS
- * может затереть причину. */
+/* Call once, early in main(), before other init */
 void wdt_capture_reboot_status(void);
 
-/* Симуляция зависания — бесконечный цикл с отключённым kick'ом.
- * Используется для тестирования через UDP 0x90. Не возвращается. */
 void wdt_simulate_hang(void) __attribute__((noreturn));
-
-/* Прямой триггер PS soft reset через SLCR, минуя WDT/ISR.
- * Используется для диагностики: если этот вызов ресетит PS, а
- * wdt_simulate_hang не ресетит — значит проблема в ISR/GIC.
- * Не возвращается. */
 void wdt_force_reset_now(void) __attribute__((noreturn));
 
 #endif /* WATCHDOG_H */

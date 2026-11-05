@@ -1,12 +1,3 @@
-//#pragma once
-//
-//#include "lwip/udp.h"
-//#include "lwip/ip_addr.h"
-//
-//// UDP-обработчик команд протокола 0x90
-//// Регистрировать через: udp_recv(cmd_udp_pcb, cmd_udp_callback, NULL);
-//void cmd_udp_callback(void *arg, struct udp_pcb *upcb,
-//                      struct pbuf *p, const ip_addr_t *addr, u16_t port);
 #pragma once
 
 #include "lwip/udp.h"
@@ -15,12 +6,8 @@
 #include "axi_cntrl_reg/axi_cntrl_reg.h"
 #include "modem.h"
 
-/* ===================================================================
- * Log debug level:
- *   0 = silent (no logs)
- *   1 = basic events (packet rx, errors)
- *   2 = verbose (+ hex-dump, register values)
- * =================================================================== */
+ /* 0 = silent, 1 = events, 2 = verbose */
+
 #ifndef LOG_DEBUG
 #define LOG_DEBUG  2
 #endif
@@ -37,7 +24,7 @@
   #define LOG2(fmt, ...)  ((void)0)
 #endif
 
-/* UDP command handler (protocol 0x90 + legacy ucnt protocol) */
+/* protocol 0x90 + legacy ucnt */
 void cmd_udp_callback(void *arg, struct udp_pcb *upcb,
                       struct pbuf *p, const ip_addr_t *addr, u16_t port);
 
